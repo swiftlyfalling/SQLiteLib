@@ -1,11 +1,12 @@
 SQLiteLib
 ==========
 
+
 Easily build a custom SQLite static library for use in OSX and iOS frameworks and apps.
 
 If you need a specific version of SQLite, or specific SQLite compilation options/features, read on.
 
-==========
+
 
 **May 29, 2016: SQLiteLib updated for SQLite 3.13.0** ([changelog](CHANGELOG.md)).
 
@@ -15,10 +16,9 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
----
+==========
 
 ### Installation:
-
 ==========
 
 #### Manual Installation (ex. into a Framework)
@@ -38,12 +38,11 @@ You probably shouldn't be using the raw SQLite C API in Swift. There are a bunch
 
 For example: ([GRDB.swift](https://github.com/groue/GRDB.swift)).
 
----
+==========
 
 ### Customization:
 
 By default, SQLiteLib builds SQLite with options that match the built-in system version of SQLite on OSX and iOS (as of OSX 10.11.5, iOS 9.3.2), [with one exception*](#additional-details).
-
 ==========
 
 #### Specifying Additional SQLite Compilation Options
@@ -91,10 +90,9 @@ The snapshop of the complete (raw) source tree for the *current* version of SQLi
 You'll want the file named "sqlite-src-*version*.zip".
 > Do **NOT** use the file beginning with "sqlite-preprocessed" - it will not work properly.
 
----
+==========
 
 ### Additional Details:
-
 ==========
 
 #### Default Compilation Options
@@ -160,13 +158,13 @@ SQLiteLib generates intermediate files in [${DERIVED_SOURCES_DIR}](https://devel
 
 The generated SQLite amalgamation files are copied to:
 
--"${BUILT_PRODUCTS_DIR}/sqlite3.c"
+-`${BUILT_PRODUCTS_DIR}/sqlite3.c`
 
--"${PROJECT_DIR}/sqlite3.h"
+-`${PROJECT_DIR}/sqlite3.h`
 
----
+==========
 
-#### Notes:
+### Notes:
 
 ##### "sqlite3.c" shows as red/missing in Xcode
 
