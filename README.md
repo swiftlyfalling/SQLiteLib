@@ -1,8 +1,8 @@
-SQLiteLib
+SQLiteLib `.xcodeproj`
 ==========
+![platform: ios | osx | watchos | tvos](https://img.shields.io/badge/platform-ios%20%7C%20osx%20%7C%20watchos%20%7C%20tvos-blue.svg) ![License MIT](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
-
-Easily build a custom SQLite static library for use in OSX and iOS frameworks and apps.
+An Xcode project to easily build a custom SQLite static library for use in OSX and iOS frameworks and apps.
 
 If you need a specific version of SQLite, or specific SQLite compilation options/features, read on.
 
