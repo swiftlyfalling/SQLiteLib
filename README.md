@@ -18,8 +18,7 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 ==========
 
-### Installation:
-==========
+## Installation:
 
 #### Manual Installation (ex. into a Framework)
 
@@ -40,9 +39,10 @@ For example: ([GRDB.swift](https://github.com/groue/GRDB.swift)).
 
 ==========
 
-### Customization:
+## Customization:
 
 By default, SQLiteLib builds SQLite with options that match the built-in system version of SQLite on OSX and iOS (as of OSX 10.11.5, iOS 9.3.2), [with one exception*](#additional-details).
+
 ==========
 
 #### Specifying Additional SQLite Compilation Options
@@ -92,8 +92,8 @@ You'll want the file named "sqlite-src-*version*.zip".
 
 ==========
 
-### Additional Details:
-==========
+## Additional Details:
+
 
 #### Default Compilation Options
 
