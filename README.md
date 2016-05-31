@@ -8,7 +8,7 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**May 29, 2016: SQLiteLib updated for SQLite 3.13.0** ([changelog](CHANGELOG.md)).
+**May 31, 2016: SQLiteLib build process tweaks** ([changelog](CHANGELOG.md)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
@@ -169,7 +169,8 @@ Xcode (verified in Version 7.3.1 (7D1014)) will always show "sqlite3.c" as red/m
 
 This is a UI issue in Xcode - the path is properly set in the project.pbxproj file to be "Relative to Build Products", and the build should succeed.
 
-##### Xcode displays a warning: "`SQLiteLib.xcconfig line 6: Unable to find included file "SQLiteLib-USER.xcconfig"`":
+##### Xcode displays a warning: 
+`SQLiteLib.xcconfig line 6: Unable to find included file "SQLiteLib-USER.xcconfig"`
 
 You are missing the USER configuration file.
 
