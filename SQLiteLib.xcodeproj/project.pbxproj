@@ -11,7 +11,6 @@
 			isa = PBXAggregateTarget;
 			buildConfigurationList = F3BA81441CFB4D5B003DC1BA /* Build configuration list for PBXAggregateTarget "amalgamation" */;
 			buildPhases = (
-				EE33C1E71CFDD03400CECFE7 /* Copy .example configuration files (if no USER customizations exist) */,
 				F3BA81451CFB4D7B003DC1BA /* ShellScript */,
 			);
 			dependencies = (
@@ -107,7 +106,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 1DEB91EB08733DB70010E9CD /* Build configuration list for PBXNativeTarget "sqlitecustom" */;
 			buildPhases = (
-				EE33C1E61CFDCF5700CECFE7 /* Copy .example configuration files (if no USER customizations exist) */,
 				D2AAC043055464E500DB518D /* Headers */,
 				D2AAC044055464E500DB518D /* Sources */,
 				D289987405E68DCB004EDB86 /* Frameworks */,
@@ -156,38 +154,6 @@
 /* End PBXProject section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		EE33C1E61CFDCF5700CECFE7 /* Copy .example configuration files (if no USER customizations exist) */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"${SRCROOT}/SQLiteLib-USER.xcconfig.example",
-			);
-			name = "Copy .example configuration files (if no USER customizations exist)";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "copiedfiles=false\nfor ((i=0; i < SCRIPT_INPUT_FILE_COUNT ; i++))\ndo\n    INFILE=SCRIPT_INPUT_FILE_$i\n    FILE=${!INFILE};\n    OUTPUTFILE=${FILE%.example}\n    echo \"${INFILE}=${FILE}\"\n    if [ -f \"$FILE\" ]\n    then\n        if [ ! -f \"$OUTPUTFILE\" ];\n        then\n            echo \"Expected USER configuration file doesn't exist\"\n            echo \"Copying .example file\"\n            cp $FILE $OUTPUTFILE\n            touch $OUTPUTFILE\n            copiedfiles=true\n        else\n            echo \"USER Configuration file already exists: ${OUTPUTFILE}\"\n            echo \"Skipping .example copy.\"\n        fi\n    else\n        echo \"Missing input .example file: ${FILE}\"\n        exit 1\n    fi\ndone\n\nif [ \"$copiedfiles\" = true ] ; then\n    touch \"${SRCROOT}/SQLiteLib.xcconfig\"\n    sleep 1\nfi\n";
-			showEnvVarsInLog = 0;
-		};
-		EE33C1E71CFDD03400CECFE7 /* Copy .example configuration files (if no USER customizations exist) */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"${SRCROOT}/SQLiteLib-USER.xcconfig.example",
-			);
-			name = "Copy .example configuration files (if no USER customizations exist)";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "copiedfiles=false\nfor ((i=0; i < SCRIPT_INPUT_FILE_COUNT ; i++))\ndo\n    INFILE=SCRIPT_INPUT_FILE_$i\n    FILE=${!INFILE};\n    OUTPUTFILE=${FILE%.example}\n    echo \"${INFILE}=${FILE}\"\n    if [ -f \"$FILE\" ]\n    then\n        if [ ! -f \"$OUTPUTFILE\" ];\n        then\n            echo \"Expected USER configuration file doesn't exist\"\n            echo \"Copying .example file\"\n            cp $FILE $OUTPUTFILE\n            touch $OUTPUTFILE\n            copiedfiles=true\n        else\n            echo \"USER Configuration file already exists: ${OUTPUTFILE}\"\n            echo \"Skipping .example copy.\"\n        fi\n    else\n        echo \"Missing input .example file: ${FILE}\"\n        exit 1\n    fi\ndone\n\nif [ \"$copiedfiles\" = true ] ; then\n    touch \"${SRCROOT}/SQLiteLib.xcconfig\"\n    sleep 1\nfi\n";
-			showEnvVarsInLog = 0;
-		};
 		F3BA81451CFB4D7B003DC1BA /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
