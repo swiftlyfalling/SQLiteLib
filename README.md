@@ -49,7 +49,7 @@ By default, SQLiteLib builds SQLite with options that match the built-in system 
 
 To specify additional options:
 
-1. Open `SQLiteLib-Custom.xcconfig`
+1. Open `SQLiteLib-USER.xcconfig`
 2. Modify `CUSTOM_SQLLIBRARY_CFLAGS` to specify the additional options.
 
 For example, to specify SQLITE\_ENABLE\_PREUPDATE\_HOOK, you would modify it like this:
@@ -59,6 +59,8 @@ CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_PREUPDATE_HOOK
 
 That's it.
 There is no need to modify any other files.
+
+> **NOTE:** If `SQLiteLib-USER.xcconfig` doesn't exist, copy the `SQLiteLib-USER.xcconfig.example` file and rename it, or build once (which will automatically do this for you). ([Reference](#notes))
 
 
 #### Compiling a Specific Version of SQLite:
@@ -167,4 +169,10 @@ Xcode (verified in Version 7.3.1 (7D1014)) will always show "sqlite3.c" as red/m
 
 This is a UI issue in Xcode - the path is properly set in the project.pbxproj file to be "Relative to Build Products", and the build should succeed.
 
+##### Xcode displays a warning: "`SQLiteLib.xcconfig line 6: Unable to find included file "SQLiteLib-USER.xcconfig"`":
 
+You are missing the USER configuration file.
+
+SQLiteLib will automatically generate this from the base template `SQLiteLib-USER.xcconfig.example` on first build, or you may copy and rename it yourself.
+
+(Future builds will not display the warning. The warning does not affect functionality.)
