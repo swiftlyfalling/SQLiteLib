@@ -2,10 +2,13 @@
 // Custom additions to the SQLite compilation options
 // These are merged with the default options (for OSX / iOS)
 //
-// As an example, SQLITE_ENABLE_PREUPDATE_HOOK is set below.
-// (On SQLite 3.13.0+, this enables pre-update hook functionality.)
+// Example:
+//      To build with SQLITE_ENABLE_PREUPDATE_HOOK set,
+//      modify the CUSTOM_SQLLIBRARY_CFLAGS line below to:
+//
+//      CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_PREUPDATE_HOOK
 //
 // For more information on the options, see: https://www.sqlite.org/compile.html
 
 // Added to OTHER_CFLAGS in all cases
-CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_PREUPDATE_HOOK
+CUSTOM_SQLLIBRARY_CFLAGS =
