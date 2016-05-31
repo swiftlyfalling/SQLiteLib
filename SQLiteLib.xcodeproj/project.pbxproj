@@ -11,6 +11,7 @@
 			isa = PBXAggregateTarget;
 			buildConfigurationList = F3BA81441CFB4D5B003DC1BA /* Build configuration list for PBXAggregateTarget "amalgamation" */;
 			buildPhases = (
+				EEDD06761CFE1FD300478EC5 /* Copy .example configuration, if no USER configuration present */,
 				F3BA81451CFB4D7B003DC1BA /* ShellScript */,
 			);
 			dependencies = (
@@ -154,6 +155,22 @@
 /* End PBXProject section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		EEDD06761CFE1FD300478EC5 /* Copy .example configuration, if no USER configuration present */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/SQLiteLib-USER.xcconfig.example",
+			);
+			name = "Copy .example configuration, if no USER configuration present";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "copiedfiles=false\nfor ((i=0; i < SCRIPT_INPUT_FILE_COUNT ; i++))\ndo\n    INFILE=SCRIPT_INPUT_FILE_$i\n    EXAMPLEFILE=${!INFILE};\n    OUTPUTFILE=${EXAMPLEFILE%.example}\n    echo \"${INFILE}=${EXAMPLEFILE}\"\n    if [ -f \"$EXAMPLEFILE\" ]\n    then\n        if [ ! -f \"$OUTPUTFILE\" ];\n        then\n            echo \"Expected USER configuration file doesn't exist\"\n            echo \"Copying .example file\"\n            cp $EXAMPLEFILE $OUTPUTFILE\n            touch $OUTPUTFILE\n            copiedfiles=true\n        else\n            echo \"USER Configuration file already exists: ${OUTPUTFILE}\"\n            echo \"Skipping .example copy.\"\n        fi\n    else\n        echo \"Missing input .example file: ${EXAMPLEFILE}\"\n        exit 1\n    fi\ndone\n\nif [ \"$copiedfiles\" = true ] ; then\n    touch \"${SRCROOT}/SQLiteLib.xcconfig\"\n    sleep 1\nfi\n";
+			showEnvVarsInLog = 0;
+		};
 		F3BA81451CFB4D7B003DC1BA /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
