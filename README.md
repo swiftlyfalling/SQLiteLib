@@ -62,6 +62,12 @@ There is no need to modify any other files.
 
 > **NOTE:** If `SQLiteLib-USER.xcconfig` doesn't exist, copy the `SQLiteLib-USER.xcconfig.example` file and rename it, or build once (which will automatically do this for you). ([Reference](#notes))
 
+##### Special Note:
+
+SQLiteLib's build process searches multiple locations for the `SQLiteLib-USER.xcconfig` file.
+
+You can place the file in the **parent directory** (i.e. the directory that contains SQLiteLib.xcodeproj), and SQLiteLib will **always** use that version of the file.
+
 
 #### Compiling a Specific Version of SQLite:
 
@@ -169,9 +175,7 @@ Xcode (verified in Version 7.3.1 (7D1014)) will always show "sqlite3.c" as red/m
 
 This is a UI issue in Xcode - the path is properly set in the project.pbxproj file to be "Relative to Build Products", and the build should succeed.
 
-##### Xcode displays a warning: 
-`SQLiteLib.xcconfig line 6: Unable to find included file "SQLiteLib-USER.xcconfig"`
+##### There's no SQLiteLib-USER.xcconfig: 
 
-SQLiteLib's project will automatically generate this from the base template `SQLiteLib-USER.xcconfig.example` on first build, or you may copy and rename it yourself.
+SQLiteLib will automatically generate this from the base template `SQLiteLib-USER.xcconfig.example` on first build, or you may copy and rename it yourself.
 
-(Future builds will not display the warning. The warning does not affect functionality.)
