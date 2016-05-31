@@ -8,7 +8,7 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**May 29, 2016: SQLiteLib updated for SQLite 3.13.0** ([changelog](CHANGELOG.md)).
+**May 31, 2016: SQLiteLib build process tweaks** ([changelog](CHANGELOG.md)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
@@ -49,7 +49,7 @@ By default, SQLiteLib builds SQLite with options that match the built-in system 
 
 To specify additional options:
 
-1. Open `SQLiteLib-Custom.xcconfig`
+1. Open `SQLiteLib-USER.xcconfig`
 2. Modify `CUSTOM_SQLLIBRARY_CFLAGS` to specify the additional options.
 
 For example, to specify SQLITE\_ENABLE\_PREUPDATE\_HOOK, you would modify it like this:
@@ -59,6 +59,14 @@ CUSTOM_SQLLIBRARY_CFLAGS = -DSQLITE_ENABLE_PREUPDATE_HOOK
 
 That's it.
 There is no need to modify any other files.
+
+> **NOTE:** If `SQLiteLib-USER.xcconfig` doesn't exist, copy the `SQLiteLib-USER.xcconfig.example` file and rename it, or build once (which will automatically do this for you). ([Reference](#notes))
+
+##### Special Note:
+
+SQLiteLib's build process searches multiple locations for the `SQLiteLib-USER.xcconfig` file.
+
+You can place the file in the **parent directory** (i.e. the directory that contains SQLiteLib.xcodeproj), and SQLiteLib will **always** use that version of the file.
 
 
 #### Compiling a Specific Version of SQLite:
@@ -167,4 +175,7 @@ Xcode (verified in Version 7.3.1 (7D1014)) will always show "sqlite3.c" as red/m
 
 This is a UI issue in Xcode - the path is properly set in the project.pbxproj file to be "Relative to Build Products", and the build should succeed.
 
+##### There's no SQLiteLib-USER.xcconfig: 
+
+SQLiteLib will automatically generate this from the base template `SQLiteLib-USER.xcconfig.example` on first build, or you may copy and rename it yourself.
 
