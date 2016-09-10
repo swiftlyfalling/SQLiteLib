@@ -921,12 +921,14 @@ static int rbuObjIterFirst(sqlite3rbu *p, RbuObjIter *pIter){
   int rc;
   memset(pIter, 0, sizeof(RbuObjIter));
 
-  rc = prepareAndCollectError(p->dbRbu, &pIter->pTblIter, &p->zErrmsg, 
+  rc = prepareFreeAndCollectError(p->dbRbu, &pIter->pTblIter, &p->zErrmsg, 
+    sqlite3_mprintf(
       "SELECT rbu_target_name(name, type='view') AS target, name "
       "FROM sqlite_master "
       "WHERE type IN ('table', 'view') AND target IS NOT NULL "
+      " %s "
       "ORDER BY name"
-  );
+  , rbuIsVacuum(p) ? "AND rootpage!=0 AND rootpage IS NOT NULL" : ""));
 
   if( rc==SQLITE_OK ){
     rc = prepareAndCollectError(p->dbMain, &pIter->pIdxIter, &p->zErrmsg,
@@ -2505,9 +2507,9 @@ static void rbuFileSuffix3(const char *zBase, char *z){
 #endif
   {
     int i, sz;
-    sz = sqlite3Strlen30(z);
+    sz = (int)strlen(z)&0xffffff;
     for(i=sz-1; i>0 && z[i]!='/' && z[i]!='.'; i--){}
-    if( z[i]=='.' && ALWAYS(sz>i+4) ) memmove(&z[i+1], &z[sz-3], 4);
+    if( z[i]=='.' && sz>i+4 ) memmove(&z[i+1], &z[sz-3], 4);
   }
 #endif
 }
@@ -3553,30 +3555,7 @@ static sqlite3rbu *openRbuHandle(
     if( p->rc==SQLITE_OK ){
       if( p->eStage==RBU_STAGE_OAL ){
         sqlite3 *db = p->dbMain;
-
-        if( pState->eStage==0 && rbuIsVacuum(p) ){
-          rbuCopyPragma(p, "page_size");
-          rbuCopyPragma(p, "auto_vacuum");
-        }
-
-        /* Open transactions both databases. The *-oal file is opened or
-        ** created at this point. */
-        if( p->rc==SQLITE_OK ){
-          p->rc = sqlite3_exec(db, "BEGIN IMMEDIATE", 0, 0, &p->zErrmsg);
-        }
-        if( p->rc==SQLITE_OK ){
-          p->rc = sqlite3_exec(p->dbRbu, "BEGIN", 0, 0, &p->zErrmsg);
-        }
-
-        /* Check if the main database is a zipvfs db. If it is, set the upper
-        ** level pager to use "journal_mode=off". This prevents it from 
-        ** generating a large journal using a temp file.  */
-        if( p->rc==SQLITE_OK ){
-          int frc = sqlite3_file_control(db, "main", SQLITE_FCNTL_ZIPVFS, 0);
-          if( frc==SQLITE_OK ){
-            p->rc = sqlite3_exec(db, "PRAGMA journal_mode=off",0,0,&p->zErrmsg);
-          }
-        }
+        p->rc = sqlite3_exec(p->dbRbu, "BEGIN", 0, 0, &p->zErrmsg);
 
         /* Point the object iterator at the first object */
         if( p->rc==SQLITE_OK ){
@@ -3587,12 +3566,34 @@ static sqlite3rbu *openRbuHandle(
         ** update finished.  */
         if( p->rc==SQLITE_OK && p->objiter.zTbl==0 ){
           p->rc = SQLITE_DONE;
-        }
+          p->eStage = RBU_STAGE_DONE;
+        }else{
+          if( p->rc==SQLITE_OK && pState->eStage==0 && rbuIsVacuum(p) ){
+            rbuCopyPragma(p, "page_size");
+            rbuCopyPragma(p, "auto_vacuum");
+          }
 
-        if( p->rc==SQLITE_OK ){
-          rbuSetupOal(p, pState);
-        }
+          /* Open transactions both databases. The *-oal file is opened or
+          ** created at this point. */
+          if( p->rc==SQLITE_OK ){
+            p->rc = sqlite3_exec(db, "BEGIN IMMEDIATE", 0, 0, &p->zErrmsg);
+          }
 
+          /* Check if the main database is a zipvfs db. If it is, set the upper
+          ** level pager to use "journal_mode=off". This prevents it from 
+          ** generating a large journal using a temp file.  */
+          if( p->rc==SQLITE_OK ){
+            int frc = sqlite3_file_control(db, "main", SQLITE_FCNTL_ZIPVFS, 0);
+            if( frc==SQLITE_OK ){
+              p->rc = sqlite3_exec(
+                db, "PRAGMA journal_mode=off",0,0,&p->zErrmsg);
+            }
+          }
+
+          if( p->rc==SQLITE_OK ){
+            rbuSetupOal(p, pState);
+          }
+        }
       }else if( p->eStage==RBU_STAGE_MOVE ){
         /* no-op */
       }else if( p->eStage==RBU_STAGE_CKPT ){
@@ -3759,9 +3760,39 @@ void sqlite3rbu_bp_progress(sqlite3rbu *p, int *pnOne, int *pnTwo){
   }
 }
 
+/*
+** Return the current state of the RBU vacuum or update operation.
+*/
+int sqlite3rbu_state(sqlite3rbu *p){
+  int aRes[] = {
+    0, SQLITE_RBU_STATE_OAL, SQLITE_RBU_STATE_MOVE,
+    0, SQLITE_RBU_STATE_CHECKPOINT, SQLITE_RBU_STATE_DONE
+  };
+
+  assert( RBU_STAGE_OAL==1 );
+  assert( RBU_STAGE_MOVE==2 );
+  assert( RBU_STAGE_CKPT==4 );
+  assert( RBU_STAGE_DONE==5 );
+  assert( aRes[RBU_STAGE_OAL]==SQLITE_RBU_STATE_OAL );
+  assert( aRes[RBU_STAGE_MOVE]==SQLITE_RBU_STATE_MOVE );
+  assert( aRes[RBU_STAGE_CKPT]==SQLITE_RBU_STATE_CHECKPOINT );
+  assert( aRes[RBU_STAGE_DONE]==SQLITE_RBU_STATE_DONE );
+
+  if( p->rc!=SQLITE_OK && p->rc!=SQLITE_DONE ){
+    return SQLITE_RBU_STATE_ERROR;
+  }else{
+    assert( p->rc!=SQLITE_DONE || p->eStage==RBU_STAGE_DONE );
+    assert( p->eStage==RBU_STAGE_OAL
+         || p->eStage==RBU_STAGE_MOVE
+         || p->eStage==RBU_STAGE_CKPT
+         || p->eStage==RBU_STAGE_DONE
+    );
+    return aRes[p->eStage];
+  }
+}
+
 int sqlite3rbu_savestate(sqlite3rbu *p){
   int rc = p->rc;
-  
   if( rc==SQLITE_DONE ) return SQLITE_OK;
 
   assert( p->eStage>=RBU_STAGE_OAL && p->eStage<=RBU_STAGE_DONE );

@@ -334,6 +334,20 @@ if test "${use_tcl}" = "yes" ; then
       fi
     fi
 
+    # Recent versions of Xcode on Macs hid the tclConfig.sh file
+    # in a strange place.
+    if test x"${ac_cv_c_tclconfig}" = x ; then
+      if test x"$cross_compiling" = xno; then
+        for i in /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk/usr/lib
+        do
+          if test -f "$i/tclConfig.sh" ; then
+            ac_cv_c_tclconfig="$i"
+            break
+          fi
+        done
+      fi
+    fi
+
     # then check for a private Tcl installation
     if test x"${ac_cv_c_tclconfig}" = x ; then
       for i in \
@@ -572,6 +586,30 @@ if test "${use_loadextension}" = "yes" ; then
   AC_SEARCH_LIBS(dlopen, dl)
 else
   OPT_FEATURE_FLAGS="-DSQLITE_OMIT_LOAD_EXTENSION=1"
+fi
+
+##########
+# Do we want to support memsys3 and/or memsys5
+#
+AC_ARG_ENABLE(memsys5, 
+  AC_HELP_STRING([--enable-memsys5],[Enable MEMSYS5]),
+  [enable_memsys5=yes],[enable_memsys5=no])
+AC_MSG_CHECKING([whether to support MEMSYS5])
+if test "${enable_memsys5}" = "yes"; then
+  OPT_FEATURE_FLAGS+=" -DSQLITE_ENABLE_MEMSYS5"
+  AC_MSG_RESULT([yes])
+else
+  AC_MSG_RESULT([no])
+fi
+AC_ARG_ENABLE(memsys3, 
+  AC_HELP_STRING([--enable-memsys3],[Enable MEMSYS3]),
+  [enable_memsys3=yes],[enable_memsys3=no])
+AC_MSG_CHECKING([whether to support MEMSYS3])
+if test "${enable_memsys3}" = "yes" -a "${enable_memsys5}" = "no"; then
+  OPT_FEATURE_FLAGS+=" -DSQLITE_ENABLE_MEMSYS3"
+  AC_MSG_RESULT([yes])
+else
+  AC_MSG_RESULT([no])
 fi
 
 #########

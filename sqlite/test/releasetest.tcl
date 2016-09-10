@@ -58,6 +58,10 @@ array set ::Configs [strip_comments {
     -DSQLITE_ENABLE_STAT4
     --enable-session
   }
+  "Stdcall" {
+    -DUSE_STDCALL=1
+    -O2
+  }
   "Have-Not" {
     # The "Have-Not" configuration sets all possible -UHAVE_feature options
     # in order to verify that the code works even on platforms that lack
@@ -120,7 +124,6 @@ array set ::Configs [strip_comments {
     -DSQLITE_ENABLE_FTS3=1
     -DSQLITE_ENABLE_RTREE=1
     -DSQLITE_ENABLE_MEMSYS5=1
-    -DSQLITE_ENABLE_MEMSYS3=1
     -DSQLITE_ENABLE_COLUMN_METADATA=1
     -DSQLITE_ENABLE_STAT4
     -DSQLITE_ENABLE_HIDDEN_COLUMNS
@@ -299,10 +302,12 @@ array set ::Platforms [strip_comments {
     "Apple"                   "threadtest fulltest"
   }
   "Windows NT-intel" {
+    "Stdcall"                 test
     "Have-Not"                test
     "Default"                 "mptest fulltestonly"
   }
   "Windows NT-amd64" {
+    "Stdcall"                 test
     "Have-Not"                test
     "Default"                 "mptest fulltestonly"
   }
@@ -726,6 +731,9 @@ proc makeCommand { targets makeOpts cflags opts } {
     set nmakeDir [file nativename $::SRCDIR]
     set nmakeFile [file nativename [file join $nmakeDir Makefile.msc]]
     lappend result nmake /f $nmakeFile TOP=$nmakeDir
+    if {[regexp {USE_STDCALL=1} $cflags]} {
+      lappend result USE_STDCALL=1
+    }
   } else {
     lappend result make
   }
