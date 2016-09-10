@@ -8,11 +8,11 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**May 31, 2016: SQLiteLib build process tweaks** ([changelog](CHANGELOG.md)).
+**September 10, 2016: Update SQLite to 3.14.1** ([changelog](CHANGELOG.md)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
-**SQLite Included:** 3.13.0
+**SQLite Included:** 3.14.1
 
 
 
@@ -39,12 +39,12 @@ For example: ([GRDB.swift](https://github.com/groue/GRDB.swift)).
 
 ## Customization:
 
-By default, SQLiteLib builds SQLite with options that match the built-in system version of SQLite on OSX and iOS (as of OSX 10.11.5, iOS 9.3.2), [with one exception*](#additional-details).
+By default, SQLiteLib builds SQLite with options that match the built-in system version of SQLite on OSX and iOS (as of OSX 10.11.6, iOS 9.3.5), [with one exception*](#additional-details).
 
 
 #### Specifying Additional SQLite Compilation Options:
 
-> By default, SQLiteLib compiles SQLite with options that match the built-in OSX/iOS version of SQLite (as of OSX 10.11, iOS 9.3.2), with one exception*.
+> By default, SQLiteLib compiles SQLite with options that match the built-in OSX/iOS version of SQLite (as of OSX 10.11, iOS 9.3.5), with one exception*.
 > You only need to follow the steps below if you wish to customize the options.
 
 To specify additional options:
@@ -65,7 +65,7 @@ There is no need to modify any other files.
 
 #### Compiling a Specific Version of SQLite:
 
-SQLiteLib currently ships with the source for SQLite 3.13.0.
+SQLiteLib currently ships with the source for SQLite 3.14.1.
 
 If you'd like to compile a newer (or older) version, the process is simple:
 
@@ -94,11 +94,11 @@ You'll want the file named "sqlite-src-*version*.zip".
 
 #### Default Compilation Options:
 
-The built-in OSX/iOS version of SQLite were built with the following compilation options (as of OSX 10.11.5, iOS 9.3.2):
+The built-in OSX/iOS version of SQLite were built with the following compilation options (as of OSX 10.11.6, iOS 9.3.5):
 
 > Fetched using `PRAGMA compile_options;`
 
-- MacOSX (10.11.5)
+- MacOSX (10.11.6)
     - `ENABLE_API_ARMOR`
     - `ENABLE_FTS3`
     - `ENABLE_FTS3_PARENTHESIS`
@@ -111,7 +111,7 @@ The built-in OSX/iOS version of SQLite were built with the following compilation
     - `SYSTEM_MALLOC`
     - `THREADSAFE=2`
 
-- iPhoneOS (9.3.2)
+- iPhoneOS (9.3.5)
     - `ENABLE_API_ARMOR`
     - `ENABLE_FTS3`
     - `ENABLE_FTS3_PARENTHESIS`
@@ -127,7 +127,7 @@ The built-in OSX/iOS version of SQLite were built with the following compilation
 
 SQLiteLib uses these settings with one exception - on iOS:
 
-The SQLite code (verified in: 3.13.0) uses a deprecated function (`gethostuuid()`).
+The SQLite code (verified in: 3.14.1) uses a deprecated function (`gethostuuid()`).
 
 D. Richard Hipp (SQLite architect), suggests working around this on iOS using `-DSQLITE_ENABLE_LOCKING_STYLE=0`:
 > "The SQLITE_ENABLE_LOCKING_STYLE thing is an apple-only extension that
@@ -140,7 +140,7 @@ D. Richard Hipp (SQLite architect), suggests working around this on iOS using `-
 Thus, SQLiteLib uses `SQLITE_ENABLE_LOCKING_STYLE=1` on OSX,
 **but on iOS, SQLiteLib compiles with `ENABLE_LOCKING_STYLE=0`**.
 
-This removes the code that uses the deprecated function, but doesn't get rid of the warning that "`gethostuuid() is disabled`" (as of 3.13.0).
+This removes the code that uses the deprecated function, but doesn't get rid of the warning that "`gethostuuid() is disabled`" (as of 3.14.1).
 
 To prevent this warning, SQLiteLib separately specifies `-Wno-#warnings` when building for iOS.
 

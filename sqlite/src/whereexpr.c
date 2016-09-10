@@ -568,7 +568,9 @@ static void exprAnalyzeOrTerm(
         if( !db->mallocFailed ){
           for(j=0, pAndTerm=pAndWC->a; j<pAndWC->nTerm; j++, pAndTerm++){
             assert( pAndTerm->pExpr );
-            if( allowedOp(pAndTerm->pExpr->op) ){
+            if( allowedOp(pAndTerm->pExpr->op) 
+             || pAndTerm->eOperator==WO_MATCH 
+            ){
               b |= sqlite3WhereGetMask(&pWInfo->sMaskSet, pAndTerm->leftCursor);
             }
           }
@@ -783,12 +785,10 @@ static int termIsEquivalence(Parse *pParse, Expr *pExpr){
   pColl = sqlite3BinaryCompareCollSeq(pParse, pExpr->pLeft, pExpr->pRight);
   if( pColl==0 || sqlite3StrICmp(pColl->zName, "BINARY")==0 ) return 1;
   pColl = sqlite3ExprCollSeq(pParse, pExpr->pLeft);
-  /* Since pLeft and pRight are both a column references, their collating
-  ** sequence should always be defined. */
-  zColl1 = ALWAYS(pColl) ? pColl->zName : 0;
+  zColl1 = pColl ? pColl->zName : 0;
   pColl = sqlite3ExprCollSeq(pParse, pExpr->pRight);
-  zColl2 = ALWAYS(pColl) ? pColl->zName : 0;
-  return sqlite3StrICmp(zColl1, zColl2)==0;
+  zColl2 = pColl ? pColl->zName : 0;
+  return sqlite3_stricmp(zColl1, zColl2)==0;
 }
 
 /*
@@ -1122,7 +1122,7 @@ static void exprAnalyze(
   ** virtual tables.  The native query optimizer does not attempt
   ** to do anything with MATCH functions.
   */
-  if( isMatchOfColumn(pExpr, &eOp2) ){
+  if( pWC->op==TK_AND && isMatchOfColumn(pExpr, &eOp2) ){
     int idxNew;
     Expr *pRight, *pLeft;
     WhereTerm *pNewTerm;
