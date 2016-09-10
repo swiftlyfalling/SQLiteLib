@@ -39,7 +39,7 @@ For example: ([GRDB.swift](https://github.com/groue/GRDB.swift)).
 
 ## Customization:
 
-By default, SQLiteLib builds SQLite with options that match the built-in system version of SQLite on OSX and iOS (as of OSX 10.11.6, iOS 9.3.2), [with one exception*](#additional-details).
+By default, SQLiteLib builds SQLite with options that match the built-in system version of SQLite on OSX and iOS (as of OSX 10.11.6, iOS 9.3.5), [with one exception*](#additional-details).
 
 
 #### Specifying Additional SQLite Compilation Options:
