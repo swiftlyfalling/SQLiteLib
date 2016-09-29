@@ -8,11 +8,11 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**September 10, 2016: Update SQLite to 3.14.1** ([changelog](CHANGELOG.md)).
+**September 29, 2016: Update SQLite to 3.14.2**, fix for building on macOS Sierra ([changelog](CHANGELOG.md)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
-**SQLite Included:** 3.14.1
+**SQLite Included:** 3.14.2
 
 
 
@@ -65,7 +65,7 @@ There is no need to modify any other files.
 
 #### Compiling a Specific Version of SQLite:
 
-SQLiteLib currently ships with the source for SQLite 3.14.1.
+SQLiteLib currently ships with the source for SQLite 3.14.2.
 
 If you'd like to compile a newer (or older) version, the process is simple:
 
@@ -127,7 +127,7 @@ The built-in OSX/iOS version of SQLite were built with the following compilation
 
 SQLiteLib uses these settings with one exception - on iOS:
 
-The SQLite code (verified in: 3.14.1) uses a deprecated function (`gethostuuid()`).
+The SQLite code (verified in: 3.14.2) uses a deprecated function (`gethostuuid()`).
 
 D. Richard Hipp (SQLite architect), suggests working around this on iOS using `-DSQLITE_ENABLE_LOCKING_STYLE=0`:
 > "The SQLITE_ENABLE_LOCKING_STYLE thing is an apple-only extension that
@@ -140,7 +140,7 @@ D. Richard Hipp (SQLite architect), suggests working around this on iOS using `-
 Thus, SQLiteLib uses `SQLITE_ENABLE_LOCKING_STYLE=1` on OSX,
 **but on iOS, SQLiteLib compiles with `ENABLE_LOCKING_STYLE=0`**.
 
-This removes the code that uses the deprecated function, but doesn't get rid of the warning that "`gethostuuid() is disabled`" (as of 3.14.1).
+This removes the code that uses the deprecated function, but doesn't get rid of the warning that "`gethostuuid() is disabled`" (as of 3.14.2).
 
 To prevent this warning, SQLiteLib separately specifies `-Wno-#warnings` when building for iOS.
 
