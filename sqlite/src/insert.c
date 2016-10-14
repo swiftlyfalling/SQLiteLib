@@ -200,7 +200,9 @@ static int readsTable(Parse *p, int iDb, Table *pTab){
 /*
 ** Locate or create an AutoincInfo structure associated with table pTab
 ** which is in database iDb.  Return the register number for the register
-** that holds the maximum rowid.
+** that holds the maximum rowid.  Return zero if pTab is not an AUTOINCREMENT
+** table.  (Also return zero when doing a VACUUM since we do not want to
+** update the AUTOINCREMENT counters during a VACUUM.)
 **
 ** There is at most one AutoincInfo structure per table even if the
 ** same table is autoincremented multiple times due to inserts within
@@ -223,7 +225,9 @@ static int autoIncBegin(
   Table *pTab         /* The table we are writing to */
 ){
   int memId = 0;      /* Register holding maximum rowid */
-  if( pTab->tabFlags & TF_Autoincrement ){
+  if( (pTab->tabFlags & TF_Autoincrement)!=0
+   && (pParse->db->flags & SQLITE_Vacuum)==0
+  ){
     Parse *pToplevel = sqlite3ParseToplevel(pParse);
     AutoincInfo *pInfo;
 
@@ -481,7 +485,6 @@ void sqlite3Insert(
   sqlite3 *db;          /* The main database structure */
   Table *pTab;          /* The table to insert into.  aka TABLE */
   char *zTab;           /* Name of the table into which we are inserting */
-  const char *zDb;      /* Name of the database holding this table */
   int i, j, idx;        /* Loop counters */
   Vdbe *v;              /* Generate code into this virtual machine */
   Index *pIdx;          /* For looping over indices of the table */
@@ -496,7 +499,6 @@ void sqlite3Insert(
   int addrCont = 0;     /* Top of insert loop. Label "C" in templates 3 and 4 */
   SelectDest dest;      /* Destination for SELECT on rhs of INSERT */
   int iDb;              /* Index of database holding TABLE */
-  Db *pDb;              /* The database containing table being inserted into */
   u8 useTempTable = 0;  /* Store SELECT results in intermediate table */
   u8 appendFlag = 0;    /* True if the insert is likely to be an append */
   u8 withoutRowid;      /* 0 for normal table.  1 for WITHOUT ROWID table */
@@ -546,9 +548,8 @@ void sqlite3Insert(
   }
   iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
   assert( iDb<db->nDb );
-  pDb = &db->aDb[iDb];
-  zDb = pDb->zName;
-  if( sqlite3AuthCheck(pParse, SQLITE_INSERT, pTab->zName, 0, zDb) ){
+  if( sqlite3AuthCheck(pParse, SQLITE_INSERT, pTab->zName, 0,
+                       db->aDb[iDb].zDbSName) ){
     goto insert_cleanup;
   }
   withoutRowid = !HasRowid(pTab);
@@ -2176,6 +2177,7 @@ static int xferOptimization(
   sqlite3ReleaseTempReg(pParse, regRowid);
   sqlite3ReleaseTempReg(pParse, regData);
   if( emptyDestTest ){
+    sqlite3AutoincrementEnd(pParse);
     sqlite3VdbeAddOp2(v, OP_Halt, SQLITE_OK, 0);
     sqlite3VdbeJumpHere(v, emptyDestTest);
     sqlite3VdbeAddOp2(v, OP_Close, iDest, 0);
