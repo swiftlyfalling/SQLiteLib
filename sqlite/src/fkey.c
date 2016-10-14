@@ -871,7 +871,7 @@ void sqlite3FkCheck(
   if( (db->flags&SQLITE_ForeignKeys)==0 ) return;
 
   iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
-  zDb = db->aDb[iDb].zName;
+  zDb = db->aDb[iDb].zDbSName;
 
   /* Loop through all the foreign key constraints for which pTab is the
   ** child table (the table that the foreign key definition is part of).  */
@@ -1242,10 +1242,10 @@ static Trigger *fkActionTrigger(
           if( pDflt ){
             pNew = sqlite3ExprDup(db, pDflt, 0);
           }else{
-            pNew = sqlite3PExpr(pParse, TK_NULL, 0, 0, 0);
+            pNew = sqlite3ExprAlloc(db, TK_NULL, 0, 0);
           }
         }else{
-          pNew = sqlite3PExpr(pParse, TK_NULL, 0, 0, 0);
+          pNew = sqlite3ExprAlloc(db, TK_NULL, 0, 0);
         }
         pList = sqlite3ExprListAppend(pParse, pList, pNew);
         sqlite3ExprListSetName(pParse, pList, &tFromCol, 0);

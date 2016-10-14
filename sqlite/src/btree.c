@@ -763,7 +763,7 @@ static int btreeMoveto(
 ){
   int rc;                    /* Status code */
   UnpackedRecord *pIdxKey;   /* Unpacked index key */
-  char aSpace[200];          /* Temp space for pIdxKey - to avoid a malloc */
+  char aSpace[384];          /* Temp space for pIdxKey - to avoid a malloc */
   char *pFree = 0;
 
   if( pKey ){
@@ -1605,8 +1605,11 @@ static int freeSpace(MemPage *pPage, u16 iStart, u16 iSize){
   if( data[iPtr+1]==0 && data[iPtr]==0 ){
     iFreeBlk = 0;  /* Shortcut for the case when the freelist is empty */
   }else{
-    while( (iFreeBlk = get2byte(&data[iPtr]))>0 && iFreeBlk<iStart ){
-      if( iFreeBlk<iPtr+4 ) return SQLITE_CORRUPT_BKPT;
+    while( (iFreeBlk = get2byte(&data[iPtr]))<iStart ){
+      if( iFreeBlk<iPtr+4 ){
+        if( iFreeBlk==0 ) break;
+        return SQLITE_CORRUPT_BKPT;
+      }
       iPtr = iFreeBlk;
     }
     if( iFreeBlk>iLast ) return SQLITE_CORRUPT_BKPT;
@@ -6097,8 +6100,6 @@ static int fillInCell(
     nHeader += putVarint32(&pCell[nHeader], nPayload);
     nHeader += putVarint(&pCell[nHeader], *(u64*)&pX->nKey);
   }else{
-    assert( pX->nData==0 );
-    assert( pX->nZero==0 );
     assert( pX->nKey<=0x7fffffff && pX->pKey!=0 );
     nSrc = nPayload = (int)pX->nKey;
     pSrc = pX->pKey;

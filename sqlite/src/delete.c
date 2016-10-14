@@ -102,7 +102,7 @@ void sqlite3MaterializeView(
   if( pFrom ){
     assert( pFrom->nSrc==1 );
     pFrom->a[0].zName = sqlite3DbStrDup(db, pView->zName);
-    pFrom->a[0].zDatabase = sqlite3DbStrDup(db, db->aDb[iDb].zName);
+    pFrom->a[0].zDatabase = sqlite3DbStrDup(db, db->aDb[iDb].zDbSName);
     assert( pFrom->a[0].pOn==0 );
     assert( pFrom->a[0].pUsing==0 );
   }
@@ -212,7 +212,6 @@ void sqlite3DeleteFrom(
 ){
   Vdbe *v;               /* The virtual database engine */
   Table *pTab;           /* The table from which records will be deleted */
-  const char *zDb;       /* Name of database holding pTab */
   int i;                 /* Loop counter */
   WhereInfo *pWInfo;     /* Information about the WHERE clause */
   Index *pIdx;           /* For looping over indices of the table */
@@ -289,8 +288,8 @@ void sqlite3DeleteFrom(
   }
   iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
   assert( iDb<db->nDb );
-  zDb = db->aDb[iDb].zName;
-  rcauth = sqlite3AuthCheck(pParse, SQLITE_DELETE, pTab->zName, 0, zDb);
+  rcauth = sqlite3AuthCheck(pParse, SQLITE_DELETE, pTab->zName, 0, 
+                            db->aDb[iDb].zDbSName);
   assert( rcauth==SQLITE_OK || rcauth==SQLITE_DENY || rcauth==SQLITE_IGNORE );
   if( rcauth==SQLITE_DENY ){
     goto delete_from_cleanup;
@@ -474,7 +473,7 @@ void sqlite3DeleteFrom(
     if( !isView ){
       int iAddrOnce = 0;
       if( eOnePass==ONEPASS_MULTI ){
-        iAddrOnce = sqlite3CodeOnce(pParse); VdbeCoverage(v);
+        iAddrOnce = sqlite3VdbeAddOp0(v, OP_Once); VdbeCoverage(v);
       }
       testcase( IsVirtual(pTab) );
       sqlite3OpenTableAndIndices(pParse, pTab, OP_OpenWrite, OPFLAG_FORDELETE,
