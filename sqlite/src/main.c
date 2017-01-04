@@ -810,6 +810,7 @@ int sqlite3_db_config(sqlite3 *db, int op, ...){
         { SQLITE_DBCONFIG_ENABLE_TRIGGER,        SQLITE_EnableTrigger  },
         { SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER, SQLITE_Fts3Tokenizer  },
         { SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, SQLITE_LoadExtension  },
+        { SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,      SQLITE_NoCkptOnClose  },
       };
       unsigned int i;
       rc = SQLITE_ERROR; /* IMP: R-42790-23372 */
@@ -1567,7 +1568,7 @@ int sqlite3_busy_timeout(sqlite3 *db, int ms){
 */
 void sqlite3_interrupt(sqlite3 *db){
 #ifdef SQLITE_ENABLE_API_ARMOR
-  if( !sqlite3SafetyCheckOk(db) ){
+  if( !sqlite3SafetyCheckOk(db) && (db==0 || db->magic!=SQLITE_MAGIC_ZOMBIE) ){
     (void)SQLITE_MISUSE_BKPT;
     return;
   }
@@ -2106,6 +2107,13 @@ int sqlite3_wal_checkpoint_v2(
     sqlite3Error(db, rc);
   }
   rc = sqlite3ApiExit(db, rc);
+
+  /* If there are no active statements, clear the interrupt flag at this
+  ** point.  */
+  if( db->nVdbeActive==0 ){
+    db->u1.isInterrupted = 0;
+  }
+
   sqlite3_mutex_leave(db->mutex);
   return rc;
 #endif
@@ -2608,6 +2616,7 @@ int sqlite3ParseUri(
 
         assert( octet>=0 && octet<256 );
         if( octet==0 ){
+#ifndef SQLITE_ENABLE_URI_00_ERROR
           /* This branch is taken when "%00" appears within the URI. In this
           ** case we ignore all text in the remainder of the path, name or
           ** value currently being parsed. So ignore the current character
@@ -2620,6 +2629,12 @@ int sqlite3ParseUri(
             iIn++;
           }
           continue;
+#else
+          /* If ENABLE_URI_00_ERROR is defined, "%00" in a URI is an error. */
+          *pzErrMsg = sqlite3_mprintf("unexpected %%00 in uri");
+          rc = SQLITE_ERROR;
+          goto parse_uri_out;
+#endif
         }
         c = octet;
       }else if( eState==1 && (c=='&' || c=='=') ){
@@ -2724,7 +2739,9 @@ int sqlite3ParseUri(
   }else{
     zFile = sqlite3_malloc64(nUri+2);
     if( !zFile ) return SQLITE_NOMEM_BKPT;
-    memcpy(zFile, zUri, nUri);
+    if( nUri ){
+      memcpy(zFile, zUri, nUri);
+    }
     zFile[nUri] = '\0';
     zFile[nUri+1] = '\0';
     flags &= ~SQLITE_OPEN_URI;
@@ -3518,7 +3535,7 @@ int sqlite3_file_control(sqlite3 *db, const char *zDbName, int op, void *pArg){
 */
 int sqlite3_test_control(int op, ...){
   int rc = 0;
-#ifdef SQLITE_OMIT_BUILTIN_TEST
+#ifdef SQLITE_UNTESTABLE
   UNUSED_PARAMETER(op);
 #else
   va_list ap;
@@ -3855,7 +3872,7 @@ int sqlite3_test_control(int op, ...){
     }
   }
   va_end(ap);
-#endif /* SQLITE_OMIT_BUILTIN_TEST */
+#endif /* SQLITE_UNTESTABLE */
   return rc;
 }
 
@@ -3911,15 +3928,8 @@ sqlite3_int64 sqlite3_uri_int64(
 ** Return the Btree pointer identified by zDbName.  Return NULL if not found.
 */
 Btree *sqlite3DbNameToBtree(sqlite3 *db, const char *zDbName){
-  int i;
-  for(i=0; i<db->nDb; i++){
-    if( db->aDb[i].pBt
-     && (zDbName==0 || sqlite3StrICmp(zDbName, db->aDb[i].zDbSName)==0)
-    ){
-      return db->aDb[i].pBt;
-    }
-  }
-  return 0;
+  int iDb = zDbName ? sqlite3FindDbName(db, zDbName) : 0;
+  return iDb<0 ? 0 : db->aDb[iDb].pBt;
 }
 
 /*
@@ -3966,7 +3976,6 @@ int sqlite3_snapshot_get(
 ){
   int rc = SQLITE_ERROR;
 #ifndef SQLITE_OMIT_WAL
-  int iDb;
 
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ){
@@ -3975,13 +3984,15 @@ int sqlite3_snapshot_get(
 #endif
   sqlite3_mutex_enter(db->mutex);
 
-  iDb = sqlite3FindDbName(db, zDb);
-  if( iDb==0 || iDb>1 ){
-    Btree *pBt = db->aDb[iDb].pBt;
-    if( 0==sqlite3BtreeIsInTrans(pBt) ){
-      rc = sqlite3BtreeBeginTrans(pBt, 0);
-      if( rc==SQLITE_OK ){
-        rc = sqlite3PagerSnapshotGet(sqlite3BtreePager(pBt), ppSnapshot);
+  if( db->autoCommit==0 ){
+    int iDb = sqlite3FindDbName(db, zDb);
+    if( iDb==0 || iDb>1 ){
+      Btree *pBt = db->aDb[iDb].pBt;
+      if( 0==sqlite3BtreeIsInTrans(pBt) ){
+        rc = sqlite3BtreeBeginTrans(pBt, 0);
+        if( rc==SQLITE_OK ){
+          rc = sqlite3PagerSnapshotGet(sqlite3BtreePager(pBt), ppSnapshot);
+        }
       }
     }
   }
@@ -4023,6 +4034,38 @@ int sqlite3_snapshot_open(
     }
   }
 
+  sqlite3_mutex_leave(db->mutex);
+#endif   /* SQLITE_OMIT_WAL */
+  return rc;
+}
+
+/*
+** Recover as many snapshots as possible from the wal file associated with
+** schema zDb of database db.
+*/
+int sqlite3_snapshot_recover(sqlite3 *db, const char *zDb){
+  int rc = SQLITE_ERROR;
+  int iDb;
+#ifndef SQLITE_OMIT_WAL
+
+#ifdef SQLITE_ENABLE_API_ARMOR
+  if( !sqlite3SafetyCheckOk(db) ){
+    return SQLITE_MISUSE_BKPT;
+  }
+#endif
+
+  sqlite3_mutex_enter(db->mutex);
+  iDb = sqlite3FindDbName(db, zDb);
+  if( iDb==0 || iDb>1 ){
+    Btree *pBt = db->aDb[iDb].pBt;
+    if( 0==sqlite3BtreeIsInReadTrans(pBt) ){
+      rc = sqlite3BtreeBeginTrans(pBt, 0);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3PagerSnapshotRecover(sqlite3BtreePager(pBt));
+        sqlite3BtreeCommit(pBt);
+      }
+    }
+  }
   sqlite3_mutex_leave(db->mutex);
 #endif   /* SQLITE_OMIT_WAL */
   return rc;

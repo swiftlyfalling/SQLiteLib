@@ -1046,6 +1046,14 @@ typedef struct Walker Walker;
 typedef struct WhereInfo WhereInfo;
 typedef struct With With;
 
+/* A VList object records a mapping between parameters/variables/wildcards
+** in the SQL statement (such as $abc, @pqr, or :xyz) and the integer
+** variable number associated with that parameter.  See the format description
+** on the sqlite3VListAdd() routine for more information.  A VList is really
+** just an array of integers.
+*/
+typedef int VList;
+
 /*
 ** Defer sourcing vdbe.h and btree.h until after the "u8" and
 ** "BusyHandler" typedefs. vdbe.h also requires a few of the opaque
@@ -1435,6 +1443,7 @@ struct sqlite3 {
 #define SQLITE_Vacuum         0x10000000  /* Currently in a VACUUM */
 #define SQLITE_CellSizeCk     0x20000000  /* Check btree cell sizes on load */
 #define SQLITE_Fts3Tokenizer  0x40000000  /* Enable fts3_tokenizer(2) */
+#define SQLITE_NoCkptOnClose  0x80000000  /* No checkpoint on close()/DETACH */
 
 
 /*
@@ -1460,13 +1469,8 @@ struct sqlite3 {
 /*
 ** Macros for testing whether or not optimizations are enabled or disabled.
 */
-#ifndef SQLITE_OMIT_BUILTIN_TEST
 #define OptimizationDisabled(db, mask)  (((db)->dbOptFlags&(mask))!=0)
 #define OptimizationEnabled(db, mask)   (((db)->dbOptFlags&(mask))==0)
-#else
-#define OptimizationDisabled(db, mask)  0
-#define OptimizationEnabled(db, mask)   1
-#endif
 
 /*
 ** Return true if it OK to factor constant expressions into the initialization
@@ -1805,9 +1809,9 @@ struct Table {
   ExprList *pCheck;    /* All CHECK constraints */
                        /*   ... also used as column name list in a VIEW */
   int tnum;            /* Root BTree page for this table */
+  u32 nTabRef;         /* Number of pointers to this Table */
   i16 iPKey;           /* If not negative, use aCol[iPKey] as the rowid */
   i16 nCol;            /* Number of columns in this table */
-  u16 nRef;            /* Number of pointers to this Table */
   LogEst nRowLogEst;   /* Estimated rows in table - from sqlite_stat1 table */
   LogEst szTabRow;     /* Estimated size of each table row in bytes */
 #ifdef SQLITE_ENABLE_COSTMULT
@@ -2956,7 +2960,6 @@ struct Parse {
 
   Token sLastToken;       /* The last token parsed */
   ynVar nVar;               /* Number of '?' variables seen in the SQL so far */
-  int nzVar;                /* Number of available slots in azVar[] */
   u8 iPkSortOrder;          /* ASC or DESC for INTEGER PRIMARY KEY */
   u8 explain;               /* True if the EXPLAIN flag is found on the query */
 #ifndef SQLITE_OMIT_VIRTUALTABLE
@@ -2968,7 +2971,7 @@ struct Parse {
   int iSelectId;            /* ID of current select for EXPLAIN output */
   int iNextSelectId;        /* Next available select ID for EXPLAIN output */
 #endif
-  char **azVar;             /* Pointers to names of parameters */
+  VList *pVList;            /* Mapping between variable names and numbers */
   Vdbe *pReprepare;         /* VM being reprepared (sqlite3Reprepare()) */
   const char *zTail;        /* All SQL text past the last semicolon parsed */
   Table *pNewTable;         /* A table being constructed by CREATE TABLE */
@@ -3236,7 +3239,7 @@ struct Sqlite3Config {
   void (*xVdbeBranch)(void*,int iSrcLine,u8 eThis,u8 eMx);  /* Callback */
   void *pVdbeBranchArg;                                     /* 1st argument */
 #endif
-#ifndef SQLITE_OMIT_BUILTIN_TEST
+#ifndef SQLITE_UNTESTABLE
   int (*xTestCallback)(int);        /* Invoked by sqlite3FaultSim() */
 #endif
   int bLocaltimeFault;              /* True to fail localtime() calls */
@@ -3440,7 +3443,7 @@ void sqlite3ScratchFree(void*);
 void *sqlite3PageMalloc(int);
 void sqlite3PageFree(void*);
 void sqlite3MemSetDefault(void);
-#ifndef SQLITE_OMIT_BUILTIN_TEST
+#ifndef SQLITE_UNTESTABLE
 void sqlite3BenignMallocHooks(void (*)(void), void (*)(void));
 #endif
 int sqlite3HeapNearlyFull(void);
@@ -3551,7 +3554,7 @@ int sqlite3NoTempsInRange(Parse*,int,int);
 Expr *sqlite3ExprAlloc(sqlite3*,int,const Token*,int);
 Expr *sqlite3Expr(sqlite3*,int,const char*);
 void sqlite3ExprAttachSubtrees(sqlite3*,Expr*,Expr*,Expr*);
-Expr *sqlite3PExpr(Parse*, int, Expr*, Expr*, const Token*);
+Expr *sqlite3PExpr(Parse*, int, Expr*, Expr*);
 void sqlite3PExprAddSelect(Parse*, Expr*, Select*);
 Expr *sqlite3ExprAnd(sqlite3*,Expr*, Expr*);
 Expr *sqlite3ExprFunction(Parse*,ExprList*, Token*);
@@ -3567,6 +3570,9 @@ u32 sqlite3ExprListFlags(const ExprList*);
 int sqlite3Init(sqlite3*, char**);
 int sqlite3InitCallback(void*, int, char**, char**);
 void sqlite3Pragma(Parse*,Token*,Token*,Token*,int);
+#ifndef SQLITE_OMIT_VIRTUALTABLE
+Module *sqlite3PragmaVtabRegister(sqlite3*,const char *zName);
+#endif
 void sqlite3ResetAllSchemasOfConnection(sqlite3*);
 void sqlite3ResetOneSchema(sqlite3*,int);
 void sqlite3CollapseDatabaseArray(sqlite3*);
@@ -3595,7 +3601,7 @@ int sqlite3ParseUri(const char*,const char*,unsigned int*,
                     sqlite3_vfs**,char**,char **);
 Btree *sqlite3DbNameToBtree(sqlite3*,const char*);
 
-#ifdef SQLITE_OMIT_BUILTIN_TEST
+#ifdef SQLITE_UNTESTABLE
 # define sqlite3FaultSim(X) SQLITE_OK
 #else
   int sqlite3FaultSim(int);
@@ -3608,7 +3614,7 @@ int sqlite3BitvecSet(Bitvec*, u32);
 void sqlite3BitvecClear(Bitvec*, u32, void*);
 void sqlite3BitvecDestroy(Bitvec*);
 u32 sqlite3BitvecSize(Bitvec*);
-#ifndef SQLITE_OMIT_BUILTIN_TEST
+#ifndef SQLITE_UNTESTABLE
 int sqlite3BitvecBuiltinTest(int,int*);
 #endif
 
@@ -3705,6 +3711,7 @@ int sqlite3ExprCodeExprList(Parse*, ExprList*, int, int, u8);
 #define SQLITE_ECEL_DUP      0x01  /* Deep, not shallow copies */
 #define SQLITE_ECEL_FACTOR   0x02  /* Factor out constant terms */
 #define SQLITE_ECEL_REF      0x04  /* Use ExprList.u.x.iOrderByCol */
+#define SQLITE_ECEL_OMITREF  0x08  /* Omit if ExprList.u.x.iOrderByCol */
 void sqlite3ExprIfTrue(Parse*, Expr*, int, int);
 void sqlite3ExprIfFalse(Parse*, Expr*, int, int);
 void sqlite3ExprIfFalseDup(Parse*, Expr*, int, int);
@@ -3727,7 +3734,7 @@ void sqlite3ExprAnalyzeAggList(NameContext*,ExprList*);
 int sqlite3ExprCoveredByIndex(Expr*, int iCur, Index *pIdx);
 int sqlite3FunctionUsesThisSrc(Expr*, SrcList*);
 Vdbe *sqlite3GetVdbe(Parse*);
-#ifndef SQLITE_OMIT_BUILTIN_TEST
+#ifndef SQLITE_UNTESTABLE
 void sqlite3PrngSaveState(void);
 void sqlite3PrngRestoreState(void);
 #endif
@@ -3864,6 +3871,9 @@ LogEst sqlite3LogEstFromDouble(double);
     defined(SQLITE_EXPLAIN_ESTIMATED_ROWS)
 u64 sqlite3LogEstToInt(LogEst);
 #endif
+VList *sqlite3VListAdd(sqlite3*,VList*,const char*,int,int);
+const char *sqlite3VListNumToName(VList*,int);
+int sqlite3VListNameToNum(VList*,const char*,int);
 
 /*
 ** Routines to read and write variable-length integers.  These used to
@@ -4080,6 +4090,13 @@ void sqlite3AutoLoadExtensions(sqlite3*);
    int sqlite3VtabSavepoint(sqlite3 *, int, int);
    void sqlite3VtabImportErrmsg(Vdbe*, sqlite3_vtab*);
    VTable *sqlite3GetVTable(sqlite3*, Table*);
+   Module *sqlite3VtabCreateModule(
+     sqlite3*,
+     const char*,
+     const sqlite3_module*,
+     void*,
+     void(*)(void*)
+   );
 #  define sqlite3VtabInSync(db) ((db)->nVTrans>0 && (db)->aVTrans==0)
 #endif
 int sqlite3VtabEponymousTableInit(Parse*,Module*);
@@ -4155,10 +4172,10 @@ const char *sqlite3JournalModename(int);
 
 /*
 ** The interface to the code in fault.c used for identifying "benign"
-** malloc failures. This is only present if SQLITE_OMIT_BUILTIN_TEST
+** malloc failures. This is only present if SQLITE_UNTESTABLE
 ** is not defined.
 */
-#ifndef SQLITE_OMIT_BUILTIN_TEST
+#ifndef SQLITE_UNTESTABLE
   void sqlite3BeginBenignMalloc(void);
   void sqlite3EndBenignMalloc(void);
 #else
@@ -4289,5 +4306,6 @@ int sqlite3ExprVectorSize(Expr *pExpr);
 int sqlite3ExprIsVector(Expr *pExpr);
 Expr *sqlite3VectorFieldSubexpr(Expr*, int);
 Expr *sqlite3ExprForVectorField(Parse*,Expr*,int);
+void sqlite3VectorErrorMsg(Parse*, Expr*);
 
 #endif /* SQLITEINT_H */

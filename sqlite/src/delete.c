@@ -36,7 +36,7 @@ Table *sqlite3SrcListLookup(Parse *pParse, SrcList *pSrc){
   sqlite3DeleteTable(pParse->db, pItem->pTab);
   pItem->pTab = pTab;
   if( pTab ){
-    pTab->nRef++;
+    pTab->nTabRef++;
   }
   if( sqlite3IndexedByLookup(pParse, pItem) ){
     pTab = 0;
@@ -164,7 +164,7 @@ Expr *sqlite3LimitWhere(
   **   );
   */
 
-  pSelectRowid = sqlite3PExpr(pParse, TK_ROW, 0, 0, 0);
+  pSelectRowid = sqlite3PExpr(pParse, TK_ROW, 0, 0);
   if( pSelectRowid == 0 ) goto limit_where_cleanup;
   pEList = sqlite3ExprListAppend(pParse, 0, pSelectRowid);
   if( pEList == 0 ) goto limit_where_cleanup;
@@ -183,8 +183,8 @@ Expr *sqlite3LimitWhere(
   if( pSelect == 0 ) return 0;
 
   /* now generate the new WHERE rowid IN clause for the DELETE/UDPATE */
-  pWhereRowid = sqlite3PExpr(pParse, TK_ROW, 0, 0, 0);
-  pInClause = pWhereRowid ? sqlite3PExpr(pParse, TK_IN, pWhereRowid, 0, 0) : 0;
+  pWhereRowid = sqlite3PExpr(pParse, TK_ROW, 0, 0);
+  pInClause = pWhereRowid ? sqlite3PExpr(pParse, TK_IN, pWhereRowid, 0) : 0;
   sqlite3PExprAddSelect(pParse, pInClause, pSelect);
   return pInClause;
 
@@ -449,7 +449,7 @@ void sqlite3DeleteFrom(
         nKey = 0;   /* Zero tells OP_Found to use a composite key */
         sqlite3VdbeAddOp4(v, OP_MakeRecord, iPk, nPk, iKey,
             sqlite3IndexAffinityStr(pParse->db, pPk), nPk);
-        sqlite3VdbeAddOp2(v, OP_IdxInsert, iEphCur, iKey);
+        sqlite3VdbeAddOp4Int(v, OP_IdxInsert, iEphCur, iKey, iPk, nPk);
       }else{
         /* Add the rowid of the row to be deleted to the RowSet */
         nKey = 1;  /* OP_Seek always uses a single rowid */
@@ -495,7 +495,7 @@ void sqlite3DeleteFrom(
       }
     }else if( pPk ){
       addrLoop = sqlite3VdbeAddOp1(v, OP_Rewind, iEphCur); VdbeCoverage(v);
-      sqlite3VdbeAddOp2(v, OP_RowKey, iEphCur, iKey);
+      sqlite3VdbeAddOp2(v, OP_RowData, iEphCur, iKey);
       assert( nKey==0 );  /* OP_Found will use a composite key */
     }else{
       addrLoop = sqlite3VdbeAddOp3(v, OP_RowSetRead, iRowSet, 0, iKey);
@@ -538,14 +538,6 @@ void sqlite3DeleteFrom(
       sqlite3VdbeGoto(v, addrLoop);
       sqlite3VdbeJumpHere(v, addrLoop);
     }     
-  
-    /* Close the cursors open on the table and its indexes. */
-    if( !isView && !IsVirtual(pTab) ){
-      if( !pPk ) sqlite3VdbeAddOp1(v, OP_Close, iDataCur);
-      for(i=0, pIdx=pTab->pIndex; pIdx; i++, pIdx=pIdx->pNext){
-        sqlite3VdbeAddOp1(v, OP_Close, iIdxCur + i);
-      }
-    }
   } /* End non-truncate path */
 
   /* Update the sqlite_sequence table by storing the content of the
@@ -720,7 +712,7 @@ void sqlite3GenerateRowDelete(
     u8 p5 = 0;
     sqlite3GenerateRowIndexDelete(pParse, pTab, iDataCur, iIdxCur,0,iIdxNoSeek);
     sqlite3VdbeAddOp2(v, OP_Delete, iDataCur, (count?OPFLAG_NCHANGE:0));
-    sqlite3VdbeChangeP4(v, -1, (char*)pTab, P4_TABLE);
+    sqlite3VdbeAppendP4(v, (char*)pTab, P4_TABLE);
     if( eMode!=ONEPASS_OFF ){
       sqlite3VdbeChangeP5(v, OPFLAG_AUXDELETE);
     }

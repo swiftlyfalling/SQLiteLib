@@ -85,6 +85,15 @@ while test "$1" != ""; do
         shift;
         SPEEDTEST_OPTS="$SPEEDTEST_OPTS --heap $1 64"
         ;;
+    --repeat)
+        CC_OPTS="$CC_OPTS -DSQLITE_ENABLE_RCACHE"
+        shift;
+        SPEEDTEST_OPTS="$SPEEDTEST_OPTS --repeat $1"
+        ;;
+    --mmap)
+        shift;
+        SPEEDTEST_OPTS="$SPEEDTEST_OPTS --mmap $1"
+        ;;
     *)
         CC_OPTS="$CC_OPTS $1"
         ;;
