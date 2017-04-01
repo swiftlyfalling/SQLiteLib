@@ -1860,6 +1860,7 @@ int sqlite3ExprContainsSubquery(Expr *p){
 */
 int sqlite3ExprIsInteger(Expr *p, int *pValue){
   int rc = 0;
+  if( p==0 ) return 0;  /* Can only happen following on OOM */
 
   /* If an expression is an integer literal that fits in a signed 32-bit
   ** integer, then the EP_IntValue flag will have already been set */
@@ -2367,7 +2368,7 @@ static char *exprINAffinity(Parse *pParse, Expr *pExpr){
   char *zRet;
 
   assert( pExpr->op==TK_IN );
-  zRet = sqlite3DbMallocZero(pParse->db, nVal+1);
+  zRet = sqlite3DbMallocRaw(pParse->db, nVal+1);
   if( zRet ){
     int i;
     for(i=0; i<nVal; i++){
@@ -2532,7 +2533,6 @@ int sqlite3CodeSubselect(
           int i;
           sqlite3SelectDestInit(&dest, SRT_Set, pExpr->iTable);
           dest.zAffSdst = exprINAffinity(pParse, pExpr);
-          assert( (pExpr->iTable&0x0000FFFF)==pExpr->iTable );
           pSelect->iLimit = 0;
           testcase( pSelect->selFlags & SF_Distinct );
           testcase( pKeyInfo==0 ); /* Caused by OOM in sqlite3KeyInfoAlloc() */
@@ -3272,7 +3272,7 @@ void sqlite3ExprCodeGetColumnToReg(
 void sqlite3ExprCacheClear(Parse *pParse){
   int i;
 
-#if SQLITE_DEBUG
+#ifdef SQLITE_DEBUG
   if( pParse->db->flags & SQLITE_VdbeAddopTrace ){
     printf("CLEAR\n");
   }
@@ -4678,6 +4678,17 @@ int sqlite3ExprListCompare(ExprList *pA, ExprList *pB, int iTab){
     if( sqlite3ExprCompare(pExprA, pExprB, iTab) ) return 1;
   }
   return 0;
+}
+
+/*
+** Like sqlite3ExprCompare() except COLLATE operators at the top-level
+** are ignored.
+*/
+int sqlite3ExprCompareSkip(Expr *pA, Expr *pB, int iTab){
+  return sqlite3ExprCompare(
+             sqlite3ExprSkipCollate(pA),
+             sqlite3ExprSkipCollate(pB),
+             iTab);
 }
 
 /*

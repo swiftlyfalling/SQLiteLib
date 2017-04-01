@@ -899,7 +899,7 @@ term(A) ::= INTEGER(X). {
   A.pExpr = sqlite3ExprAlloc(pParse->db, TK_INTEGER, &X, 1);
   A.zStart = X.z;
   A.zEnd = X.z + X.n;
-  if( A.pExpr ) A.pExpr->flags |= EP_Leaf;
+  if( A.pExpr ) A.pExpr->flags |= EP_Leaf|EP_Resolved;
 }
 expr(A) ::= VARIABLE(X).     {
   if( !(X.z[0]=='#' && sqlite3Isdigit(X.z[1])) ){
@@ -1000,7 +1000,7 @@ expr(A) ::= expr(A) STAR|SLASH|REM(OP) expr(Y).
                                         {spanBinaryExpr(pParse,@OP,&A,&Y);}
 expr(A) ::= expr(A) CONCAT(OP) expr(Y). {spanBinaryExpr(pParse,@OP,&A,&Y);}
 %type likeop {Token}
-likeop(A) ::= LIKE_KW|MATCH(X).     {A=X;/*A-overwrites-X*/}
+likeop(A) ::= LIKE_KW|MATCH(A).
 likeop(A) ::= NOT LIKE_KW|MATCH(X). {A=X; A.n|=0x80000000; /*A-overwrite-X*/}
 expr(A) ::= expr(A) likeop(OP) expr(Y).  [LIKE_KW]  {
   ExprList *pList;
