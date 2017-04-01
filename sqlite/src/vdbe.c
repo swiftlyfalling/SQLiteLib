@@ -403,9 +403,7 @@ void sqlite3VdbeMemPrettyPrint(Mem *pMem, char *zBuf){
     }else{
       c = 's';
     }
-
-    sqlite3_snprintf(100, zCsr, "%c", c);
-    zCsr += sqlite3Strlen30(zCsr);
+    *(zCsr++) = c;
     sqlite3_snprintf(100, zCsr, "%d[", pMem->n);
     zCsr += sqlite3Strlen30(zCsr);
     for(i=0; i<16 && i<pMem->n; i++){
@@ -417,9 +415,7 @@ void sqlite3VdbeMemPrettyPrint(Mem *pMem, char *zBuf){
       if( z<32 || z>126 ) *zCsr++ = '.';
       else *zCsr++ = z;
     }
-
-    sqlite3_snprintf(100, zCsr, "]%s", encnames[pMem->enc]);
-    zCsr += sqlite3Strlen30(zCsr);
+    *(zCsr++) = ']';
     if( f & MEM_Zero ){
       sqlite3_snprintf(100, zCsr,"+%dz",pMem->u.nZero);
       zCsr += sqlite3Strlen30(zCsr);
@@ -1669,21 +1665,21 @@ case OP_Function: {
     for(i=pCtx->argc-1; i>=0; i--) pCtx->argv[i] = &aMem[pOp->p2+i];
   }
 
-  memAboutToChange(p, pCtx->pOut);
+  memAboutToChange(p, pOut);
 #ifdef SQLITE_DEBUG
   for(i=0; i<pCtx->argc; i++){
     assert( memIsValid(pCtx->argv[i]) );
     REGISTER_TRACE(pOp->p2+i, pCtx->argv[i]);
   }
 #endif
-  MemSetTypeFlag(pCtx->pOut, MEM_Null);
+  MemSetTypeFlag(pOut, MEM_Null);
   pCtx->fErrorOrAux = 0;
   (*pCtx->pFunc->xSFunc)(pCtx, pCtx->argc, pCtx->argv);/* IMP: R-24505-23230 */
 
   /* If the function returned an error, throw an exception */
   if( pCtx->fErrorOrAux ){
     if( pCtx->isError ){
-      sqlite3VdbeError(p, "%s", sqlite3_value_text(pCtx->pOut));
+      sqlite3VdbeError(p, "%s", sqlite3_value_text(pOut));
       rc = pCtx->isError;
     }
     sqlite3VdbeDeleteAuxData(db, &p->pAuxData, pCtx->iOp, pOp->p1);
@@ -1692,12 +1688,12 @@ case OP_Function: {
 
   /* Copy the result of the function into register P3 */
   if( pOut->flags & (MEM_Str|MEM_Blob) ){
-    sqlite3VdbeChangeEncoding(pCtx->pOut, encoding);
-    if( sqlite3VdbeMemTooBig(pCtx->pOut) ) goto too_big;
+    sqlite3VdbeChangeEncoding(pOut, encoding);
+    if( sqlite3VdbeMemTooBig(pOut) ) goto too_big;
   }
 
-  REGISTER_TRACE(pOp->p3, pCtx->pOut);
-  UPDATE_MAX_BLOBSIZE(pCtx->pOut);
+  REGISTER_TRACE(pOp->p3, pOut);
+  UPDATE_MAX_BLOBSIZE(pOut);
   break;
 }
 
@@ -2198,7 +2194,7 @@ case OP_Compare: {
   assert( pKeyInfo!=0 );
   p1 = pOp->p1;
   p2 = pOp->p2;
-#if SQLITE_DEBUG
+#ifdef SQLITE_DEBUG
   if( aPermute ){
     int k, mx = 0;
     for(k=0; k<n; k++) if( aPermute[k]>mx ) mx = aPermute[k];
@@ -2336,19 +2332,39 @@ case OP_BitNot: {             /* same as TK_BITNOT, in1, out2 */
 
 /* Opcode: Once P1 P2 * * *
 **
-** If the P1 value is equal to the P1 value on the OP_Init opcode at
-** instruction 0, then jump to P2.  If the two P1 values differ, then
-** set the P1 value on this opcode to equal the P1 value on the OP_Init
-** and fall through.
+** Fall through to the next instruction the first time this opcode is
+** encountered on each invocation of the byte-code program.  Jump to P2
+** on the second and all subsequent encounters during the same invocation.
+**
+** Top-level programs determine first invocation by comparing the P1
+** operand against the P1 operand on the OP_Init opcode at the beginning
+** of the program.  If the P1 values differ, then fall through and make
+** the P1 of this opcode equal to the P1 of OP_Init.  If P1 values are
+** the same then take the jump.
+**
+** For subprograms, there is a bitmask in the VdbeFrame that determines
+** whether or not the jump should be taken.  The bitmask is necessary
+** because the self-altering code trick does not work for recursive
+** triggers.
 */
 case OP_Once: {             /* jump */
+  u32 iAddr;                /* Address of this instruction */
   assert( p->aOp[0].opcode==OP_Init );
-  VdbeBranchTaken(p->aOp[0].p1==pOp->p1, 2);
-  if( p->aOp[0].p1==pOp->p1 ){
-    goto jump_to_p2;
+  if( p->pFrame ){
+    iAddr = (int)(pOp - p->aOp);
+    if( (p->pFrame->aOnce[iAddr/8] & (1<<(iAddr & 7)))!=0 ){
+      VdbeBranchTaken(1, 2);
+      goto jump_to_p2;
+    }
+    p->pFrame->aOnce[iAddr/8] |= 1<<(iAddr & 7);
   }else{
-    pOp->p1 = p->aOp[0].p1;
+    if( p->aOp[0].p1==pOp->p1 ){
+      VdbeBranchTaken(1, 2);
+      goto jump_to_p2;
+    }
   }
+  VdbeBranchTaken(0, 2);
+  pOp->p1 = p->aOp[0].p1;
   break;
 }
 
@@ -2661,8 +2677,13 @@ case OP_Column: {
       **    2. the length(X) function if X is a blob, and
       **    3. if the content length is zero.
       ** So we might as well use bogus content rather than reading
-      ** content from disk. */
-      static u8 aZero[8];  /* This is the bogus content */
+      ** content from disk. 
+      **
+      ** Although sqlite3VdbeSerialGet() may read at most 8 bytes from the
+      ** buffer passed to it, debugging function VdbeMemPrettyPrint() may
+      ** read up to 16. So 16 bytes of bogus content is supplied.
+      */
+      static u8 aZero[16];  /* This is the bogus content */
       sqlite3VdbeSerialGet(aZero, t, pDest);
     }else{
       rc = sqlite3VdbeMemFromBtree(pC->uc.pCursor, aOffset[p2], len, pDest);
@@ -4847,6 +4868,33 @@ case OP_Last: {        /* jump */
   break;
 }
 
+/* Opcode: IfSmaller P1 P2 P3 * *
+**
+** Estimate the number of rows in the table P1.  Jump to P2 if that
+** estimate is less than approximately 2**(0.1*P3).
+*/
+case OP_IfSmaller: {        /* jump */
+  VdbeCursor *pC;
+  BtCursor *pCrsr;
+  int res;
+  i64 sz;
+
+  assert( pOp->p1>=0 && pOp->p1<p->nCursor );
+  pC = p->apCsr[pOp->p1];
+  assert( pC!=0 );
+  pCrsr = pC->uc.pCursor;
+  assert( pCrsr );
+  rc = sqlite3BtreeFirst(pCrsr, &res);
+  if( rc ) goto abort_due_to_error;
+  if( res==0 ){
+    sz = sqlite3BtreeRowCountEst(pCrsr);
+    if( ALWAYS(sz>=0) && sqlite3LogEst((u64)sz)<pOp->p3 ) res = 1;
+  }
+  VdbeBranchTaken(res!=0,2);
+  if( res ) goto jump_to_p2;
+  break;
+}
+
 
 /* Opcode: SorterSort P1 P2 * * *
 **
@@ -5491,6 +5539,18 @@ case OP_CreateTable: {          /* out2 */
   break;
 }
 
+/* Opcode: SqlExec * * * P4 *
+**
+** Run the SQL statement or statements specified in the P4 string.
+*/
+case OP_SqlExec: {
+  db->nSqlExec++;
+  rc = sqlite3_exec(db, pOp->p4.z, 0, 0, 0);
+  db->nSqlExec--;
+  if( rc ) goto abort_due_to_error;
+  break;
+}
+
 /* Opcode: ParseSchema P1 * * P4 *
 **
 ** Read and parse all entries from the SQLITE_MASTER table of database P1
@@ -5611,7 +5671,7 @@ case OP_DropTrigger: {
 ** register P1 the text of an error message describing any problems.
 ** If no problems are found, store a NULL in register P1.
 **
-** The register P3 contains the maximum number of allowed errors.
+** The register P3 contains one less than the maximum number of allowed errors.
 ** At most reg(P3) errors will be reported.
 ** In other words, the analysis stops as soon as reg(P1) errors are 
 ** seen.  Reg(P1) is updated with the number of errors remaining.
@@ -5644,14 +5704,14 @@ case OP_IntegrityCk: {
   assert( pOp->p5<db->nDb );
   assert( DbMaskTest(p->btreeMask, pOp->p5) );
   z = sqlite3BtreeIntegrityCheck(db->aDb[pOp->p5].pBt, aRoot, nRoot,
-                                 (int)pnErr->u.i, &nErr);
-  pnErr->u.i -= nErr;
+                                 (int)pnErr->u.i+1, &nErr);
   sqlite3VdbeMemSetNull(pIn1);
   if( nErr==0 ){
     assert( z==0 );
   }else if( z==0 ){
     goto no_mem;
   }else{
+    pnErr->u.i -= nErr-1;
     sqlite3VdbeMemSetStr(pIn1, z, -1, SQLITE_UTF8, sqlite3_free);
   }
   UPDATE_MAX_BLOBSIZE(pIn1);
@@ -5830,7 +5890,8 @@ case OP_Program: {        /* jump */
     if( pProgram->nCsr==0 ) nMem++;
     nByte = ROUND8(sizeof(VdbeFrame))
               + nMem * sizeof(Mem)
-              + pProgram->nCsr * sizeof(VdbeCursor *);
+              + pProgram->nCsr * sizeof(VdbeCursor*)
+              + (pProgram->nOp + 7)/8;
     pFrame = sqlite3DbMallocZero(db, nByte);
     if( !pFrame ){
       goto no_mem;
@@ -5881,6 +5942,8 @@ case OP_Program: {        /* jump */
   p->nMem = pFrame->nChildMem;
   p->nCursor = (u16)pFrame->nChildCsr;
   p->apCsr = (VdbeCursor **)&aMem[p->nMem];
+  pFrame->aOnce = (u8*)&p->apCsr[pProgram->nCsr];
+  memset(pFrame->aOnce, 0, (pProgram->nOp + 7)/8);
   p->aOp = aOp = pProgram->aOp;
   p->nOp = pProgram->nOp;
 #ifdef SQLITE_ENABLE_STMT_SCANSTATUS
@@ -6910,7 +6973,11 @@ case OP_Init: {          /* jump */
       sqlite3_free(z);
     }else
 #endif
-    {
+    if( db->nVdbeExec>1 ){
+      char *z = sqlite3MPrintf(db, "-- %s", zTrace);
+      (void)db->xTrace(SQLITE_TRACE_STMT, db->pTraceArg, p, z);
+      sqlite3DbFree(db, z);
+    }else{
       (void)db->xTrace(SQLITE_TRACE_STMT, db->pTraceArg, p, zTrace);
     }
   }

@@ -368,22 +368,16 @@ struct RtreeMatchArg {
 # define MIN(x,y) ((x) > (y) ? (y) : (x))
 #endif
 
-/* What version of GCC is being used.  0 means GCC is not being used */
+/* What version of GCC is being used.  0 means GCC is not being used .
+** Note that the GCC_VERSION macro will also be set correctly when using
+** clang, since clang works hard to be gcc compatible.  So the gcc
+** optimizations will also work when compiling with clang.
+*/
 #ifndef GCC_VERSION
 #if defined(__GNUC__) && !defined(SQLITE_DISABLE_INTRINSIC)
 # define GCC_VERSION (__GNUC__*1000000+__GNUC_MINOR__*1000+__GNUC_PATCHLEVEL__)
 #else
 # define GCC_VERSION 0
-#endif
-#endif
-
-/* What version of CLANG is being used.  0 means CLANG is not being used */
-#ifndef CLANG_VERSION
-#if defined(__clang__) && !defined(_WIN32) && !defined(SQLITE_DISABLE_INTRINSIC)
-# define CLANG_VERSION \
-            (__clang_major__*1000000+__clang_minor__*1000+__clang_patchlevel__)
-#else
-# define CLANG_VERSION 0
 #endif
 #endif
 
@@ -437,7 +431,7 @@ static void readCoord(u8 *p, RtreeCoord *pCoord){
   assert( ((((char*)p) - (char*)0)&3)==0 );  /* p is always 4-byte aligned */
 #if SQLITE_BYTEORDER==1234 && MSVC_VERSION>=1300
   pCoord->u = _byteswap_ulong(*(u32*)p);
-#elif SQLITE_BYTEORDER==1234 && (GCC_VERSION>=4003000 || CLANG_VERSION>=3000000)
+#elif SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
   pCoord->u = __builtin_bswap32(*(u32*)p);
 #elif SQLITE_BYTEORDER==4321
   pCoord->u = *(u32*)p;
@@ -455,7 +449,7 @@ static i64 readInt64(u8 *p){
   u64 x;
   memcpy(&x, p, 8);
   return (i64)_byteswap_uint64(x);
-#elif SQLITE_BYTEORDER==1234 && (GCC_VERSION>=4003000 || CLANG_VERSION>=3000000)
+#elif SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
   u64 x;
   memcpy(&x, p, 8);
   return (i64)__builtin_bswap64(x);
@@ -464,15 +458,15 @@ static i64 readInt64(u8 *p){
   memcpy(&x, p, 8);
   return x;
 #else
-  return (
-    (((i64)p[0]) << 56) + 
-    (((i64)p[1]) << 48) + 
-    (((i64)p[2]) << 40) + 
-    (((i64)p[3]) << 32) + 
-    (((i64)p[4]) << 24) + 
-    (((i64)p[5]) << 16) + 
-    (((i64)p[6]) <<  8) + 
-    (((i64)p[7]) <<  0)
+  return (i64)(
+    (((u64)p[0]) << 56) + 
+    (((u64)p[1]) << 48) + 
+    (((u64)p[2]) << 40) + 
+    (((u64)p[3]) << 32) + 
+    (((u64)p[4]) << 24) + 
+    (((u64)p[5]) << 16) + 
+    (((u64)p[6]) <<  8) + 
+    (((u64)p[7]) <<  0)
   );
 #endif
 }
@@ -491,7 +485,7 @@ static int writeCoord(u8 *p, RtreeCoord *pCoord){
   assert( ((((char*)p) - (char*)0)&3)==0 );  /* p is always 4-byte aligned */
   assert( sizeof(RtreeCoord)==4 );
   assert( sizeof(u32)==4 );
-#if SQLITE_BYTEORDER==1234 && (GCC_VERSION>=4003000 || CLANG_VERSION>=3000000)
+#if SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
   i = __builtin_bswap32(pCoord->u);
   memcpy(p, &i, 4);
 #elif SQLITE_BYTEORDER==1234 && MSVC_VERSION>=1300
@@ -510,7 +504,7 @@ static int writeCoord(u8 *p, RtreeCoord *pCoord){
   return 4;
 }
 static int writeInt64(u8 *p, i64 i){
-#if SQLITE_BYTEORDER==1234 && (GCC_VERSION>=4003000 || CLANG_VERSION>=3000000)
+#if SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
   i = (i64)__builtin_bswap64((u64)i);
   memcpy(p, &i, 8);
 #elif SQLITE_BYTEORDER==1234 && MSVC_VERSION>=1300
@@ -1066,7 +1060,7 @@ static int rtreeEof(sqlite3_vtab_cursor *cur){
     c.u = _byteswap_ulong(*(u32*)a);                            \
     r = eInt ? (sqlite3_rtree_dbl)c.i : (sqlite3_rtree_dbl)c.f; \
 }
-#elif SQLITE_BYTEORDER==1234 && (GCC_VERSION>=4003000 || CLANG_VERSION>=3000000)
+#elif SQLITE_BYTEORDER==1234 && GCC_VERSION>=4003000
 #define RTREE_DECODE_COORD(eInt, a, r) {                        \
     RtreeCoord c;    /* Coordinate decoded */                   \
     c.u = __builtin_bswap32(*(u32*)a);                          \
