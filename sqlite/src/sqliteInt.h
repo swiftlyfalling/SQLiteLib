@@ -2443,6 +2443,7 @@ struct Expr {
 */
 struct ExprList {
   int nExpr;             /* Number of expressions on the list */
+  int nAlloc;            /* Number of a[] slots allocated */
   struct ExprList_item { /* For each expression in the list */
     Expr *pExpr;            /* The parse tree for this expression */
     char *zName;            /* Token associated with this expression */
@@ -2458,7 +2459,7 @@ struct ExprList {
       } x;
       int iConstExprReg;      /* Register in which Expr value is cached */
     } u;
-  } *a;                  /* Alloc a power of two greater or equal to nExpr */
+  } a[1];                  /* One slot for each expression in the list */
 };
 
 /*
@@ -3315,14 +3316,17 @@ struct Walker {
   int walkerDepth;                          /* Number of subqueries */
   u8 eCode;                                 /* A small processing code */
   union {                                   /* Extra data for callback */
-    NameContext *pNC;                          /* Naming context */
-    int n;                                     /* A counter */
-    int iCur;                                  /* A cursor number */
-    SrcList *pSrcList;                         /* FROM clause */
-    struct SrcCount *pSrcCount;                /* Counting column references */
-    struct CCurHint *pCCurHint;                /* Used by codeCursorHint() */
-    int *aiCol;                                /* array of column indexes */
-    struct IdxCover *pIdxCover;                /* Check for index coverage */
+    NameContext *pNC;                         /* Naming context */
+    int n;                                    /* A counter */
+    int iCur;                                 /* A cursor number */
+    SrcList *pSrcList;                        /* FROM clause */
+    struct SrcCount *pSrcCount;               /* Counting column references */
+    struct CCurHint *pCCurHint;               /* Used by codeCursorHint() */
+    int *aiCol;                               /* array of column indexes */
+    struct IdxCover *pIdxCover;               /* Check for index coverage */
+    struct IdxExprTrans *pIdxTrans;           /* Convert indexed expr to column */
+    ExprList *pGroupBy;                       /* GROUP BY clause */
+    struct HavingToWhereCtx *pHavingCtx;      /* HAVING to WHERE clause ctx */
   } u;
 };
 
@@ -3476,6 +3480,7 @@ void *sqlite3Realloc(void*, u64);
 void *sqlite3DbReallocOrFree(sqlite3 *, void *, u64);
 void *sqlite3DbRealloc(sqlite3 *, void *, u64);
 void sqlite3DbFree(sqlite3*, void*);
+void sqlite3DbFreeNN(sqlite3*, void*);
 int sqlite3MallocSize(void*);
 int sqlite3DbMallocSize(sqlite3*, void*);
 void *sqlite3ScratchMalloc(int);
@@ -3791,6 +3796,7 @@ void sqlite3LeaveMutexAndCloseZombie(sqlite3*);
 int sqlite3ExprIsConstant(Expr*);
 int sqlite3ExprIsConstantNotJoin(Expr*);
 int sqlite3ExprIsConstantOrFunction(Expr*, u8);
+int sqlite3ExprIsConstantOrGroupBy(Parse*, Expr*, ExprList*);
 int sqlite3ExprIsTableConstant(Expr*,int);
 #ifdef SQLITE_ENABLE_CURSOR_HINTS
 int sqlite3ExprContainsSubquery(Expr*);
