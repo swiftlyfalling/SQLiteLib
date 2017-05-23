@@ -7,9 +7,10 @@ git:
 
 gemfile: .ci/Gemfile.travis
 
-xcode_sdk:
-  - xcode7.3
-  - xcode8.3
+## see: 
+#osx_image:
+#  - xcode7.3
+#  - xcode8.3
 
 env:
   - DESTINATION: platform=macOS,arch=x86_64
@@ -18,6 +19,24 @@ env:
   - DESTINATION: generic/platform=watchOS
   - DESTINATION: generic/platform=tvOS
   - DESTINATION: platform=iOS Simulator,name=iPhone 6s,OS=10.3
+
+matrix:
+  include:
+    - osx_image: xcode7.3
+    - osx_image: xcode8.3
+
+#matrix:
+#  include:
+#    - os: osx
+#      osx_image: xcode7.3
+#    - os: osx
+#      osx_image: xcode8.3
+#      env:
+#        - DESTINATION: platform=macOS,arch=x86_64
+#    - os: osx
+#      osx_image: xcode8.3
+#      env:
+#        - DESTINATION: platform=macOS,arch=i386
 
 script:
   - cd .ci
