@@ -18,12 +18,12 @@ git:
 #  - xcode8.3
 #
 #env:
-#  - DESTINATION: platform=macOS,arch=x86_64
-#  - DESTINATION: platform=macOS,arch=i386
-#  - DESTINATION: generic/platform=iOS
-#  - DESTINATION: generic/platform=watchOS
-#  - DESTINATION: generic/platform=tvOS
-#  - DESTINATION: platform=iOS Simulator,name=iPhone 6s,OS=10.3
+#  - DESTINATION="platform=macOS,arch=x86_64"
+#  - DESTINATION="platform=macOS,arch=i386"
+#  - DESTINATION="generic/platform=iOS"
+#  - DESTINATION="generic/platform=watchOS"
+#  - DESTINATION="generic/platform=tvOS"
+#  - DESTINATION="platform=iOS Simulator,name=iPhone 6s,OS=10.3"
 
 matrix:
   include:
@@ -35,27 +35,27 @@ matrix:
       osx_image: xcode7.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: platform=macOS
+        - DESTINATION="platform=OS X"
     - os: osx
       osx_image: xcode7.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: generic/platform=iOS
+        - DESTINATION="generic/platform=iOS"
     - os: osx
       osx_image: xcode7.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: generic/platform=watchOS
+        - DESTINATION="generic/platform=watchOS"
     - os: osx
       osx_image: xcode7.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: generic/platform=tvOS
+        - DESTINATION="generic/platform=tvOS"
     - os: osx
       osx_image: xcode7.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: platform=iOS Simulator,name=iPhone 6s,OS=9.3
+        - DESTINATION="platform=iOS Simulator,name=iPhone 6s,OS=9.3"
 
     ###################################
     ### Xcode 8.3 on macOS 10.12
@@ -64,27 +64,27 @@ matrix:
       osx_image: xcode8.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: platform=macOS
+        - DESTINATION="platform=macOS"
     - os: osx
       osx_image: xcode8.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: generic/platform=iOS
+        - DESTINATION="generic/platform=iOS"
     - os: osx
       osx_image: xcode8.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: generic/platform=watchOS
+        - DESTINATION="generic/platform=watchOS"
     - os: osx
       osx_image: xcode8.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: generic/platform=tvOS
+        - DESTINATION="generic/platform=tvOS"
     - os: osx
       osx_image: xcode8.3
       gemfile: .ci/Gemfile.travis
       env:
-        - DESTINATION: platform=iOS Simulator,name=iPhone 6s,OS=10.3
+        - DESTINATION="platform=iOS Simulator,name=iPhone 6s,OS=10.3"
 
 script:
   - cd .ci
