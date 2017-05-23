@@ -51,7 +51,7 @@ endif
 	  -project SQLiteLib.xcodeproj \
 	  -scheme sqlitelib \
 	  -configuration Release \
-	  -destination $(DESTINATION) \
+	  -destination '$(DESTINATION)' \
 	  clean build \
 	  $(XCPRETTY)
 
