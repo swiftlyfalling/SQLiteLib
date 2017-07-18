@@ -12,7 +12,7 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
-**SQLite Included:** **[3.19.2](https://www.sqlite.org/releaselog/3_19_3.html)**
+**SQLite Included:** **[3.19.3](https://www.sqlite.org/releaselog/3_19_3.html)**
 
 
 
