@@ -8,7 +8,7 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**May 27, 2017: Update SQLite to 3.19.3** ([changelog](CHANGELOG.md)).
+**Jul 18, 2017: Update SQLite to 3.19.3** ([changelog](CHANGELOG.md)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
