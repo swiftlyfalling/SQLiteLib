@@ -27,7 +27,7 @@
 */
 int sqlite3VdbeCheckMemInvariants(Mem *p){
   /* If MEM_Dyn is set then Mem.xDel!=0.  
-  ** Mem.xDel is might not be initialized if MEM_Dyn is clear.
+  ** Mem.xDel might not be initialized if MEM_Dyn is clear.
   */
   assert( (p->flags & MEM_Dyn)==0 || p->xDel!=0 );
 
@@ -40,9 +40,34 @@ int sqlite3VdbeCheckMemInvariants(Mem *p){
   /* Cannot be both MEM_Int and MEM_Real at the same time */
   assert( (p->flags & (MEM_Int|MEM_Real))!=(MEM_Int|MEM_Real) );
 
-  /* Cannot be both MEM_Null and some other type */
-  assert( (p->flags & MEM_Null)==0 ||
-          (p->flags & (MEM_Int|MEM_Real|MEM_Str|MEM_Blob))==0 );
+  if( p->flags & MEM_Null ){
+    /* Cannot be both MEM_Null and some other type */
+    assert( (p->flags & (MEM_Int|MEM_Real|MEM_Str|MEM_Blob
+                         |MEM_RowSet|MEM_Frame|MEM_Agg|MEM_Zero))==0 );
+
+    /* If MEM_Null is set, then either the value is a pure NULL (the usual
+    ** case) or it is a pointer set using sqlite3_bind_pointer() or
+    ** sqlite3_result_pointer().  If a pointer, then MEM_Term must also be
+    ** set.
+    */
+    if( (p->flags & (MEM_Term|MEM_Subtype))==(MEM_Term|MEM_Subtype) ){
+      /* This is a pointer type.  There may be a flag to indicate what to
+      ** do with the pointer. */
+      assert( ((p->flags&MEM_Dyn)!=0 ? 1 : 0) +
+              ((p->flags&MEM_Ephem)!=0 ? 1 : 0) +
+              ((p->flags&MEM_Static)!=0 ? 1 : 0) <= 1 );
+
+      /* No other bits set */
+      assert( (p->flags & ~(MEM_Null|MEM_Term|MEM_Subtype
+                           |MEM_Dyn|MEM_Ephem|MEM_Static))==0 );
+    }else{
+      /* A pure NULL might have other flags, such as MEM_Static, MEM_Dyn,
+      ** MEM_Ephem, MEM_Cleared, or MEM_Subtype */
+    }
+  }else{
+    /* The MEM_Cleared bit is only allowed on NULLs */
+    assert( (p->flags & MEM_Cleared)==0 );
+  }
 
   /* The szMalloc field holds the correct memory allocation size */
   assert( p->szMalloc==0
@@ -705,6 +730,27 @@ void sqlite3VdbeMemSetInt64(Mem *pMem, i64 val){
   }
 }
 
+/* A no-op destructor */
+static void sqlite3NoopDestructor(void *p){ UNUSED_PARAMETER(p); }
+
+/*
+** Set the value stored in *pMem should already be a NULL.
+** Also store a pointer to go with it.
+*/
+void sqlite3VdbeMemSetPointer(
+  Mem *pMem,
+  void *pPtr,
+  const char *zPType,
+  void (*xDestructor)(void*)
+){
+  assert( pMem->flags==MEM_Null );
+  pMem->u.zPType = zPType ? zPType : "";
+  pMem->z = pPtr;
+  pMem->flags = MEM_Null|MEM_Dyn|MEM_Subtype|MEM_Term;
+  pMem->eSubtype = 'p';
+  pMem->xDel = xDestructor ? xDestructor : sqlite3NoopDestructor;
+}
+
 #ifndef SQLITE_OMIT_FLOATING_POINT
 /*
 ** Delete any previous value and set the value stored in *pMem to val,
@@ -1325,7 +1371,7 @@ static int valueFromExpr(
     }
   }else if( op==TK_UMINUS ) {
     /* This branch happens for multiple negative signs.  Ex: -(-5) */
-    if( SQLITE_OK==sqlite3ValueFromExpr(db,pExpr->pLeft,enc,affinity,&pVal) 
+    if( SQLITE_OK==valueFromExpr(db,pExpr->pLeft,enc,affinity,&pVal,pCtx) 
      && pVal!=0
     ){
       sqlite3VdbeMemNumerify(pVal);
@@ -1482,14 +1528,13 @@ static int stat4ValueFromExpr(
   /* Skip over any TK_COLLATE nodes */
   pExpr = sqlite3ExprSkipCollate(pExpr);
 
+  assert( pExpr==0 || pExpr->op!=TK_REGISTER || pExpr->op2!=TK_VARIABLE );
   if( !pExpr ){
     pVal = valueNew(db, pAlloc);
     if( pVal ){
       sqlite3VdbeMemSetNull((Mem*)pVal);
     }
-  }else if( pExpr->op==TK_VARIABLE
-        || NEVER(pExpr->op==TK_REGISTER && pExpr->op2==TK_VARIABLE)
-  ){
+  }else if( pExpr->op==TK_VARIABLE && (db->flags & SQLITE_EnableQPSG)==0 ){
     Vdbe *v;
     int iBindVar = pExpr->iColumn;
     sqlite3VdbeSetVarmask(pParse->pVdbe, iBindVar);
@@ -1497,9 +1542,7 @@ static int stat4ValueFromExpr(
       pVal = valueNew(db, pAlloc);
       if( pVal ){
         rc = sqlite3VdbeMemCopy((Mem*)pVal, &v->aVar[iBindVar-1]);
-        if( rc==SQLITE_OK ){
-          sqlite3ValueApplyAffinity(pVal, affinity, ENC(db));
-        }
+        sqlite3ValueApplyAffinity(pVal, affinity, ENC(db));
         pVal->db = pParse->db;
       }
     }
