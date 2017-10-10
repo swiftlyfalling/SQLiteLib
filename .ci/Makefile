@@ -20,7 +20,7 @@ XCPRETTY_PATH := $(shell command -v xcpretty 2> /dev/null)
 # Targets
 # =======
 #
-# make test_build: build SQLiteLib for a specific destination
+# make test_build: build SQLiteLib for a specific destination or sdk
 
 default: test_build
 
@@ -41,9 +41,7 @@ endif
 
 # Test if SQLiteLib can be built for a specified destination
 test_build: clean
-ifeq ($(DESTINATION),)
-	$(error a DESTINATION must be specified (see xcodebuild documentation))
-endif
+ifneq ($(DESTINATION),)
 
 	cd .. && \
 	cp SQLiteLib-USER.xcconfig.example SQLiteLib-USER.xcconfig && \
@@ -54,6 +52,21 @@ endif
 	  -destination '$(DESTINATION)' \
 	  clean build \
 	  $(XCPRETTY)
+
+else
+ifeq ($(SDK),)
+	$(error a DESTINATION or SDK must be specified (see xcodebuild documentation))
+endif
+	cd .. && \
+	cp SQLiteLib-USER.xcconfig.example SQLiteLib-USER.xcconfig && \
+	$(XCODEBUILD) \
+	  -project SQLiteLib.xcodeproj \
+	  -scheme sqlitelib \
+	  -configuration Release \
+	  -sdk '$(SDK)' \
+	  clean build \
+	  $(XCPRETTY)
+endif
 
 clean:
 	cd .. && \
