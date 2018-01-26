@@ -8,11 +8,11 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**Nov 2, 2017: Update SQLite to 3.21.0** ([changelog](CHANGELOG.md)).
+**Jan 24, 2018: Update SQLite to 3.22.0** ([changelog](https://github.com/swiftlyfalling/SQLiteLib/commits/master)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
-**SQLite Included:** **[3.21.0](https://www.sqlite.org/releaselog/3_21_0.html)**
+**SQLite Included:** **[3.22.0](https://www.sqlite.org/releaselog/3_22_0.html)**
 
 
 
@@ -65,7 +65,7 @@ There is no need to modify any other files.
 
 #### Compiling a Specific Version of SQLite:
 
-SQLiteLib currently ships with the source for SQLite 3.21.0.
+SQLiteLib currently ships with the source for SQLite 3.22.0.
 
 If you'd like to compile a newer (or older) version, the process is simple:
 
