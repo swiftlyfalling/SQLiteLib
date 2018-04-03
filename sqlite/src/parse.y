@@ -313,6 +313,10 @@ ccons ::= DEFAULT MINUS(A) term(X) scanpt(Z).      {
 }
 ccons ::= DEFAULT scanpt id(X).       {
   Expr *p = tokenExpr(pParse, TK_STRING, X);
+  if( p ){
+    sqlite3ExprIdToTrueFalse(p);
+    testcase( p->op==TK_TRUEFALSE && sqlite3ExprTruthValue(p) );
+  }
   sqlite3AddDefaultValue(pParse,p,X.z,X.z+X.n);
 }
 
@@ -519,8 +523,7 @@ oneselect(A) ::= SELECT(S) distinct(D) selcollist(W) from(X) where_opt(Y)
   if( A!=0 ){
     const char *z = s.z+6;
     int i;
-    sqlite3_snprintf(sizeof(A->zSelName), A->zSelName, "#%d",
-                     ++pParse->nSelect);
+    sqlite3_snprintf(sizeof(A->zSelName), A->zSelName,"#%d",++pParse->nSelect);
     while( z[0]==' ' ) z++;
     if( z[0]=='/' && z[1]=='*' ){
       z += 2;
