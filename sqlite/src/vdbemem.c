@@ -800,7 +800,7 @@ void sqlite3VdbeMemSetInt64(Mem *pMem, i64 val){
 }
 
 /* A no-op destructor */
-static void sqlite3NoopDestructor(void *p){ UNUSED_PARAMETER(p); }
+void sqlite3NoopDestructor(void *p){ UNUSED_PARAMETER(p); }
 
 /*
 ** Set the value stored in *pMem should already be a NULL.
@@ -1478,12 +1478,16 @@ static int valueFromExpr(
                          0, SQLITE_DYNAMIC);
   }
 #endif
-
 #ifdef SQLITE_ENABLE_STAT3_OR_STAT4
   else if( op==TK_FUNCTION && pCtx!=0 ){
     rc = valueFromFunction(db, pExpr, enc, affinity, &pVal, pCtx);
   }
 #endif
+  else if( op==TK_TRUEFALSE ){
+     pVal = valueNew(db, pCtx);
+     pVal->flags = MEM_Int;
+     pVal->u.i = pExpr->u.zToken[4]==0;
+  }
 
   *ppVal = pVal;
   return rc;
