@@ -2373,8 +2373,8 @@ static int whereLoopAddBtreeIndex(
 
   pNew = pBuilder->pNew;
   if( db->mallocFailed ) return SQLITE_NOMEM_BKPT;
-  WHERETRACE(0x800, ("BEGIN addBtreeIdx(%s), nEq=%d\n",
-                     pProbe->zName, pNew->u.btree.nEq));
+  WHERETRACE(0x800, ("BEGIN %s.addBtreeIdx(%s), nEq=%d\n",
+                     pProbe->pTable->zName,pProbe->zName, pNew->u.btree.nEq));
 
   assert( (pNew->wsFlags & WHERE_VIRTUALTABLE)==0 );
   assert( (pNew->wsFlags & WHERE_TOP_LIMIT)==0 );
@@ -2420,15 +2420,12 @@ static int whereLoopAddBtreeIndex(
     ** to mix with a lower range bound from some other source */
     if( pTerm->wtFlags & TERM_LIKEOPT && pTerm->eOperator==WO_LT ) continue;
 
-    /* Do not allow IS constraints from the WHERE clause to be used by the
+    /* Do not allow constraints from the WHERE clause to be used by the
     ** right table of a LEFT JOIN.  Only constraints in the ON clause are
     ** allowed */
     if( (pSrc->fg.jointype & JT_LEFT)!=0
      && !ExprHasProperty(pTerm->pExpr, EP_FromJoin)
-     && (eOp & (WO_IS|WO_ISNULL))!=0
     ){
-      testcase( eOp & WO_IS );
-      testcase( eOp & WO_ISNULL );
       continue;
     }
 
@@ -2660,8 +2657,8 @@ static int whereLoopAddBtreeIndex(
     pNew->wsFlags = saved_wsFlags;
   }
 
-  WHERETRACE(0x800, ("END addBtreeIdx(%s), nEq=%d, rc=%d\n",
-                      pProbe->zName, saved_nEq, rc));
+  WHERETRACE(0x800, ("END %s.addBtreeIdx(%s), nEq=%d, rc=%d\n",
+                      pProbe->pTable->zName, pProbe->zName, saved_nEq, rc));
   return rc;
 }
 
@@ -2865,14 +2862,16 @@ static int whereLoopAddBtree(
         /* TUNING: One-time cost for computing the automatic index is
         ** estimated to be X*N*log2(N) where N is the number of rows in
         ** the table being indexed and where X is 7 (LogEst=28) for normal
-        ** tables or 1.375 (LogEst=4) for views and subqueries.  The value
+        ** tables or 0.5 (LogEst=-10) for views and subqueries.  The value
         ** of X is smaller for views and subqueries so that the query planner
         ** will be more aggressive about generating automatic indexes for
         ** those objects, since there is no opportunity to add schema
         ** indexes on subqueries and views. */
-        pNew->rSetup = rLogSize + rSize + 4;
+        pNew->rSetup = rLogSize + rSize;
         if( pTab->pSelect==0 && (pTab->tabFlags & TF_Ephemeral)==0 ){
-          pNew->rSetup += 24;
+          pNew->rSetup += 28;
+        }else{
+          pNew->rSetup -= 10;
         }
         ApplyCostMultiplier(pNew->rSetup, pTab->costMult);
         if( pNew->rSetup<0 ) pNew->rSetup = 0;
@@ -3099,9 +3098,9 @@ static int whereLoopAddVirtualOne(
        || pNew->aLTerm[iTerm]!=0
        || pIdxCons->usable==0
       ){
-        rc = SQLITE_ERROR;
         sqlite3ErrorMsg(pParse,"%s.xBestIndex malfunction",pSrc->pTab->zName);
-        return rc;
+        testcase( pIdxInfo->needToFreeIdxStr );
+        return SQLITE_ERROR;
       }
       testcase( iTerm==nConstraint-1 );
       testcase( j==0 );
@@ -3129,6 +3128,15 @@ static int whereLoopAddVirtualOne(
   pNew->u.vtab.omitMask &= ~mNoOmit;
 
   pNew->nLTerm = mxTerm+1;
+  for(i=0; i<=mxTerm; i++){
+    if( pNew->aLTerm[i]==0 ){
+      /* The non-zero argvIdx values must be contiguous.  Raise an
+      ** error if they are not */
+      sqlite3ErrorMsg(pParse,"%s.xBestIndex malfunction",pSrc->pTab->zName);
+      testcase( pIdxInfo->needToFreeIdxStr );
+      return SQLITE_ERROR;
+    }
+  }
   assert( pNew->nLTerm<=pNew->nLSlot );
   pNew->u.vtab.idxNum = pIdxInfo->idxNum;
   pNew->u.vtab.needFree = pIdxInfo->needToFreeIdxStr;
@@ -3244,6 +3252,7 @@ static int whereLoopAddVirtual(
   }
 
   /* First call xBestIndex() with all constraints usable. */
+  WHERETRACE(0x800, ("BEGIN %s.addVirtual()\n", pSrc->pTab->zName));
   WHERETRACE(0x40, ("  VirtualOne: all usable\n"));
   rc = whereLoopAddVirtualOne(pBuilder, mPrereq, ALLBITS, 0, p, mNoOmit, &bIn);
 
@@ -3319,6 +3328,7 @@ static int whereLoopAddVirtual(
 
   if( p->needToFreeIdxStr ) sqlite3_free(p->idxStr);
   sqlite3DbFreeNN(pParse->db, p);
+  WHERETRACE(0x800, ("END %s.addVirtual(), rc=%d\n", pSrc->pTab->zName, rc));
   return rc;
 }
 #endif /* SQLITE_OMIT_VIRTUALTABLE */
@@ -3997,12 +4007,15 @@ static int wherePathSolver(WhereInfo *pWInfo, LogEst nRowEst){
 
         if( (pWLoop->prereq & ~pFrom->maskLoop)!=0 ) continue;
         if( (pWLoop->maskSelf & pFrom->maskLoop)!=0 ) continue;
-        if( (pWLoop->wsFlags & WHERE_AUTO_INDEX)!=0 && pFrom->nRow<10 ){
+        if( (pWLoop->wsFlags & WHERE_AUTO_INDEX)!=0 && pFrom->nRow<3 ){
           /* Do not use an automatic index if the this loop is expected
-          ** to run less than 2 times. */
+          ** to run less than 1.25 times.  It is tempting to also exclude
+          ** automatic index usage on an outer loop, but sometimes an automatic
+          ** index is useful in the outer loop of a correlated subquery. */
           assert( 10==sqlite3LogEst(2) );
           continue;
         }
+
         /* At this point, pWLoop is a candidate to be the next loop. 
         ** Compute its cost */
         rUnsorted = sqlite3LogEstAdd(pWLoop->rSetup,pWLoop->rRun + pFrom->nRow);
@@ -4584,6 +4597,7 @@ WhereInfo *sqlite3WhereBegin(
     if( wctrlFlags & WHERE_WANT_DISTINCT ){
       pWInfo->eDistinct = WHERE_DISTINCT_UNIQUE;
     }
+    ExplainQueryPlan((pParse, 0, "SCAN CONSTANT ROW"));
   }else{
     /* Assign a bit from the bitmask to every term in the FROM clause.
     **
@@ -4979,7 +4993,7 @@ WhereInfo *sqlite3WhereBegin(
     }
 #endif
     addrExplain = sqlite3WhereExplainOneScan(
-        pParse, pTabList, pLevel, ii, pLevel->iFrom, wctrlFlags
+        pParse, pTabList, pLevel, wctrlFlags
     );
     pLevel->addrBody = sqlite3VdbeCurrentAddr(v);
     notReady = sqlite3WhereCodeOneLoopStart(pWInfo, ii, notReady);
