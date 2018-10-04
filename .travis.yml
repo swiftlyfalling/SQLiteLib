@@ -58,7 +58,7 @@ matrix:
         - DESTINATION="platform=iOS Simulator,name=iPhone 6s,OS=9.3"
 
     ###################################
-    ### Xcode 8.3 on macOS 10.12
+    ### Xcode 8.3.3 on macOS 10.12
 
     - os: osx
       osx_image: xcode8.3
@@ -87,6 +87,40 @@ matrix:
         - DESTINATION="platform=iOS Simulator,name=iPhone 6s,OS=10.3.1"
     - os: osx
       osx_image: xcode8.3
+      gemfile: .ci/Gemfile.travis
+      env:
+        - SDK="iphoneos"
+
+    ###################################
+    ### Xcode 9.4.1 on macOS 10.13
+
+    - os: osx
+      osx_image: xcode9.4
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="platform=macOS"
+    - os: osx
+      osx_image: xcode9.4
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="generic/platform=iOS"
+    - os: osx
+      osx_image: xcode9.4
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="generic/platform=watchOS"
+    - os: osx
+      osx_image: xcode9.4
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="generic/platform=tvOS"
+    - os: osx
+      osx_image: xcode9.4
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="platform=iOS Simulator,name=iPhone 8,OS=11.4"
+    - os: osx
+      osx_image: xcode9.4
       gemfile: .ci/Gemfile.travis
       env:
         - SDK="iphoneos"
