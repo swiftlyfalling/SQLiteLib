@@ -125,6 +125,40 @@ matrix:
       env:
         - SDK="iphoneos"
 
+    ###################################
+    ### Xcode 10.1 on macOS 10.13
+
+    - os: osx
+      osx_image: xcode10.1
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="platform=macOS"
+    - os: osx
+      osx_image: xcode10.1
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="generic/platform=iOS"
+    - os: osx
+      osx_image: xcode10.1
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="generic/platform=watchOS"
+    - os: osx
+      osx_image: xcode10.1
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="generic/platform=tvOS"
+    - os: osx
+      osx_image: xcode10.1
+      gemfile: .ci/Gemfile.travis
+      env:
+        - DESTINATION="platform=iOS Simulator,name=iPhone 8,OS=12.1"
+    - os: osx
+      osx_image: xcode10.1
+      gemfile: .ci/Gemfile.travis
+      env:
+        - SDK="iphoneos"
+
 script:
   - cd .ci
   - make test_build
