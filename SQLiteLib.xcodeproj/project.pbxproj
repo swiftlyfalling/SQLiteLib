@@ -12,7 +12,7 @@
 			buildConfigurationList = F3BA81441CFB4D5B003DC1BA /* Build configuration list for PBXAggregateTarget "amalgamation" */;
 			buildPhases = (
 				EEDD06761CFE1FD300478EC5 /* Copy .example configuration, if no USER configuration present */,
-				F3BA81451CFB4D7B003DC1BA /* ShellScript */,
+				F3BA81451CFB4D7B003DC1BA /* Build amalgamation */,
 			);
 			dependencies = (
 			);
@@ -36,6 +36,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B538715222566E13004BFBB9 /* copyExampleConfiguration.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; name = copyExampleConfiguration.sh; path = scripts/copyExampleConfiguration.sh; sourceTree = "<group>"; };
+		B538715322566F25004BFBB9 /* buildAmalgamation.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; name = buildAmalgamation.sh; path = scripts/buildAmalgamation.sh; sourceTree = "<group>"; };
 		D2AAC046055464E500DB518D /* libsqlitecustom.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libsqlitecustom.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		EE751A3E1D9D774E00A88200 /* sqlite3.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = sqlite3.c; path = ../sqlite/sqlite3.c; sourceTree = BUILT_PRODUCTS_DIR; };
 		F32EB7781CFBC91D007C7948 /* sqlite3.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = sqlite3.h; sourceTree = "<group>"; };
@@ -59,6 +61,8 @@
 			children = (
 				F3F14A6D1CF9E9DB00E8D86B /* SQLiteLib-USER.xcconfig */,
 				F3F14A621CF9E59E00E8D86B /* SQLiteLib.xcconfig */,
+				B538715222566E13004BFBB9 /* copyExampleConfiguration.sh */,
+				B538715322566F25004BFBB9 /* buildAmalgamation.sh */,
 				08FB7795FE84155DC02AAC07 /* Source */,
 				C6A0FF2B0290797F04C91782 /* Documentation */,
 				1AB674ADFE9D54B511CA2CBB /* Products */,
@@ -168,10 +172,10 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "copiedfiles=false\nfor ((i=0; i < SCRIPT_INPUT_FILE_COUNT ; i++))\ndo\n    INFILE=SCRIPT_INPUT_FILE_$i\n    EXAMPLEFILE=${!INFILE};\n    OUTPUTFILE=${EXAMPLEFILE%.example}\n    echo \"${INFILE}=${EXAMPLEFILE}\"\n    if [ -f \"$EXAMPLEFILE\" ]\n    then\n        if [ ! -f \"$OUTPUTFILE\" ];\n        then\n            echo \"Expected USER configuration file doesn't exist\"\n            echo \"Copying .example file\"\n            cp $EXAMPLEFILE $OUTPUTFILE\n            touch $OUTPUTFILE\n            copiedfiles=true\n        else\n            echo \"USER Configuration file already exists: ${OUTPUTFILE}\"\n            echo \"Skipping .example copy.\"\n        fi\n    else\n        echo \"Missing input .example file: ${EXAMPLEFILE}\"\n        exit 1\n    fi\ndone\n\nif [ \"$copiedfiles\" = true ] ; then\n    touch \"${SRCROOT}/SQLiteLib.xcconfig\"\n    sleep 1\nfi\n";
+			shellScript = "$SRCROOT/scripts/copyExampleConfiguration.sh\n";
 			showEnvVarsInLog = 0;
 		};
-		F3BA81451CFB4D7B003DC1BA /* ShellScript */ = {
+		F3BA81451CFB4D7B003DC1BA /* Build amalgamation */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -181,13 +185,14 @@
 				"$(SRCROOT)/SQLiteLib.xcconfig",
 				"$(SRCROOT)/SQLiteLib-Custom.xcconfig",
 			);
+			name = "Build amalgamation";
 			outputPaths = (
 				"${BUILD_DIR}/sqlite/sqlite3.c",
 				"${PROJECT_DIR}/sqlite3.h",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\necho \"Configure and generate SQLite amalgamation files\"\n\npattern=\" |'\"\nif [[ ${PROJECT_DIR} =~ $pattern ]]\nthen\necho \"Unsafe PROJECT_DIR for make - contains spaces.\"\necho \"PROJECT_DIR=${PROJECT_DIR}\"\nexit 1\nfi\n\n# Ensure we always run configure/make as if we were compiling for macOS (as parts of the\n# configure/make process require building & running an executable)\n#\n# The generated sqlite3.c will be built for the correct platform by Xcode via the\n# 'sqlitecustom' target\nSDK_PLATFORM_NAME=\"macosx\"\nMACOSX_VERSION_MIN=\"$(sw_vers -productVersion | cut -d '.' -f 1,2)\"\n\n\nSDKROOT=\"$(xcrun --sdk $SDK_PLATFORM_NAME --show-sdk-path)\"\nCC=\"$(xcrun --sdk $SDK_PLATFORM_NAME -f clang)\"\nCXX=\"$(xcrun --sdk $SDK_PLATFORM_NAME -f clang++)\"\nCFLAGS=\"-arch x86_64 -isysroot $SDKROOT -mmacosx-version-min=$MACOSX_VERSION_MIN $OTHER_CFLAGS\"\nCXXFLAGS=$CFLAGS\nexport CC CXX CFLAGS CXXFLAGS\n\nmkdir -p \"${DERIVED_SOURCES_DIR}\"\ncd \"${DERIVED_SOURCES_DIR}\"\n\necho \"Clean-up previous files if necessary\"\n[ -e Makefile ] && make distclean\n\necho \"Configure makefile\"\n\"${PROJECT_DIR}/sqlite/configure\" --srcdir=\"${PROJECT_DIR}/sqlite/\"\n\necho \"Make SQLite amalgamation\"\nmake sqlite3.c\n\n# Check for SQLite-SEE files in source root\n# If present, merge with amalgamation\nhasSEE=false\nif [ -e \"${PROJECT_DIR}/see-prefix.txt\" ] && [ -e \"${DERIVED_SOURCES_DIR}/sqlite3.c\" ] && [ -e \"${PROJECT_DIR}/see.c\" ]\nthen\necho \"Found sqlite-see\"\nhasSEE=true\ncat \"${PROJECT_DIR}/see-prefix.txt\" \"${DERIVED_SOURCES_DIR}/sqlite3.c\" \"${PROJECT_DIR}/see.c\" > \"${DERIVED_SOURCES_DIR}/sqlite3-see.c\"\nfi\n\n# copy generated amalgamation files (sqlite3.c and sqlite3.h)\n# to BUILD_DIR/sqlite\n# Overwrite with SQLite-SEE if present\nSQLITE_OUTPUT_DIR=\"${BUILD_DIR}/sqlite\"\nmkdir -p \"${SQLITE_OUTPUT_DIR}\"\necho \"Copying sqlite3.c to ${SQLITE_OUTPUT_DIR}/sqlite3.c\"\ncp ./sqlite3.c \"${SQLITE_OUTPUT_DIR}/sqlite3.c\"\necho \"Copying sqlite3.h to ${PROJECT_DIR}/sqlite3.h\"\ncp ./sqlite3.h \"${PROJECT_DIR}/sqlite3.h\"\nif [ \"$hasSEE\" = true ] ;\nthen\necho \"Overwriting sqlite3.c to with sqlite3-see.c\"\ncp ./sqlite3-see.c \"${SQLITE_OUTPUT_DIR}/sqlite3.c\"\nfi\n\necho \"Finished generating SQLite amalgamation files\"\n";
+			shellScript = "$SRCROOT/scripts/buildamalgamation.sh\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
