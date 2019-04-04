@@ -161,6 +161,20 @@ The generated SQLite amalgamation files are copied to:
 
 
 
+#### Using the SQLite Encryption Extension
+
+You can include the [SQLite EncryptionExtension](https://www.sqlite.org/see/) if you have a license to do so.
+
+To include it in the generated amalgamation, locate the SEE files on your system. In your `SQLiteLib-USER.xcconfig` file, add the following entries:
+
+```SQLITE_SEE_PREFIX = /path/to/your/see-code/see-prefix.txt
+SQLITE_SEE_CODE = /path/to/your/see-code/see.c
+```
+
+These will then be merged into the generated amalgamation
+
+
+
 ## Notes:
 
 ##### "sqlite3.c" shows as red/missing in Xcode:
