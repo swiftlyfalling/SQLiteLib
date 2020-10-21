@@ -308,18 +308,6 @@
   SQLITE_EXTENSION_INIT1
 #endif
 
-/*
-** The following are copied from sqliteInt.h.
-**
-** Constants for the largest and smallest possible 64-bit signed integers.
-** These macros are designed to work correctly on both 32-bit and 64-bit
-** compilers.
-*/
-#ifndef SQLITE_AMALGAMATION
-# define LARGEST_INT64  (0xffffffff|(((sqlite3_int64)0x7fffffff)<<32))
-# define SMALLEST_INT64 (((sqlite3_int64)-1) - LARGEST_INT64)
-#endif
-
 static int fts3EvalNext(Fts3Cursor *pCsr);
 static int fts3EvalStart(Fts3Cursor *pCsr);
 static int fts3TermSegReaderCursor(
@@ -364,12 +352,7 @@ int sqlite3Fts3PutVarint(char *p, sqlite_int64 v){
   v = (*ptr++);                                               \
   if( (v & mask2)==0 ){ var = v; return ret; }
 
-/* 
-** Read a 64-bit variable-length integer from memory starting at p[0].
-** Return the number of bytes read, or 0 on error.
-** The value is stored in *v.
-*/
-int sqlite3Fts3GetVarint(const char *pBuf, sqlite_int64 *v){
+int sqlite3Fts3GetVarintU(const char *pBuf, sqlite_uint64 *v){
   const unsigned char *p = (const unsigned char*)pBuf;
   const unsigned char *pStart = p;
   u32 a;
@@ -384,6 +367,41 @@ int sqlite3Fts3GetVarint(const char *pBuf, sqlite_int64 *v){
 
   for(shift=28; shift<=63; shift+=7){
     u64 c = *p++;
+    b += (c&0x7F) << shift;
+    if( (c & 0x80)==0 ) break;
+  }
+  *v = b;
+  return (int)(p - pStart);
+}
+
+/* 
+** Read a 64-bit variable-length integer from memory starting at p[0].
+** Return the number of bytes read, or 0 on error.
+** The value is stored in *v.
+*/
+int sqlite3Fts3GetVarint(const char *pBuf, sqlite_int64 *v){
+  return sqlite3Fts3GetVarintU(pBuf, (sqlite3_uint64*)v);
+}
+
+/* 
+** Read a 64-bit variable-length integer from memory starting at p[0] and
+** not extending past pEnd[-1].
+** Return the number of bytes read, or 0 on error.
+** The value is stored in *v.
+*/
+int sqlite3Fts3GetVarintBounded(
+  const char *pBuf,
+  const char *pEnd,
+  sqlite_int64 *v
+){
+  const unsigned char *p = (const unsigned char*)pBuf;
+  const unsigned char *pStart = p;
+  const unsigned char *pX = (const unsigned char*)pEnd;
+  u64 b = 0;
+  int shift;
+  for(shift=0; shift<=63; shift+=7){
+    u64 c = p<pX ? *p : 0;
+    p++;
     b += (c&0x7F) << shift;
     if( (c & 0x80)==0 ) break;
   }
@@ -945,6 +963,22 @@ static char *fts3WriteExprList(Fts3Table *p, const char *zFunc, int *pRc){
 }
 
 /*
+** Buffer z contains a positive integer value encoded as utf-8 text.
+** Decode this value and store it in *pnOut, returning the number of bytes
+** consumed. If an overflow error occurs return a negative value.
+*/
+int sqlite3Fts3ReadInt(const char *z, int *pnOut){
+  u64 iVal = 0;
+  int i;
+  for(i=0; z[i]>='0' && z[i]<='9'; i++){
+    iVal = iVal*10 + (z[i] - '0');
+    if( iVal>0x7FFFFFFF ) return -1;
+  }
+  *pnOut = (int)iVal;
+  return i;
+}
+
+/*
 ** This function interprets the string at (*pp) as a non-negative integer
 ** value. It reads the integer and sets *pnOut to the value read, then 
 ** sets *pp to point to the byte immediately following the last byte of
@@ -959,19 +993,17 @@ static char *fts3WriteExprList(Fts3Table *p, const char *zFunc, int *pRc){
 */
 static int fts3GobbleInt(const char **pp, int *pnOut){
   const int MAX_NPREFIX = 10000000;
-  const char *p;                  /* Iterator pointer */
   int nInt = 0;                   /* Output value */
-
-  for(p=*pp; p[0]>='0' && p[0]<='9'; p++){
-    nInt = nInt * 10 + (p[0] - '0');
-    if( nInt>MAX_NPREFIX ){
-      nInt = 0;
-      break;
-    }
+  int nByte;
+  nByte = sqlite3Fts3ReadInt(*pp, &nInt);
+  if( nInt>MAX_NPREFIX ){
+    nInt = 0;
   }
-  if( p==*pp ) return SQLITE_ERROR;
+  if( nByte==0 ){
+    return SQLITE_ERROR;
+  }
   *pnOut = nInt;
-  *pp = p;
+  *pp += nByte;
   return SQLITE_OK;
 }
 
@@ -1486,6 +1518,10 @@ static int fts3InitVtab(
   fts3DatabasePageSize(&rc, p);
   p->nNodeSize = p->nPgsz-35;
 
+#if defined(SQLITE_DEBUG)||defined(SQLITE_TEST)
+  p->nMergeCount = FTS3_MERGE_COUNT;
+#endif
+
   /* Declare the table schema to SQLite. */
   fts3DeclareVtab(&rc, p);
 
@@ -1580,6 +1616,10 @@ static int fts3BestIndexMethod(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo){
   int iDocidGe = -1;              /* Index of docid>=x constraint, if present */
   int iDocidLe = -1;              /* Index of docid<=x constraint, if present */
   int iIdx;
+
+  if( p->bLock ){
+    return SQLITE_ERROR;
+  }
 
   /* By default use a full table scan. This is an expensive option,
   ** so search through the constraints to see if a more efficient 
@@ -1779,7 +1819,11 @@ static int fts3CursorSeekStmt(Fts3Cursor *pCsr){
     }else{
       zSql = sqlite3_mprintf("SELECT %s WHERE rowid = ?", p->zReadExprlist);
       if( !zSql ) return SQLITE_NOMEM;
-      rc = sqlite3_prepare_v3(p->db, zSql,-1,SQLITE_PREPARE_PERSISTENT,&pCsr->pStmt,0);
+      p->bLock++;
+      rc = sqlite3_prepare_v3(
+          p->db, zSql,-1,SQLITE_PREPARE_PERSISTENT,&pCsr->pStmt,0
+      );
+      p->bLock--;
       sqlite3_free(zSql);
     }
     if( rc==SQLITE_OK ) pCsr->bSeekStmt = 1;
@@ -1797,11 +1841,15 @@ static int fts3CursorSeek(sqlite3_context *pContext, Fts3Cursor *pCsr){
   if( pCsr->isRequireSeek ){
     rc = fts3CursorSeekStmt(pCsr);
     if( rc==SQLITE_OK ){
+      Fts3Table *pTab = (Fts3Table*)pCsr->base.pVtab;
+      pTab->bLock++;
       sqlite3_bind_int64(pCsr->pStmt, 1, pCsr->iPrevId);
       pCsr->isRequireSeek = 0;
       if( SQLITE_ROW==sqlite3_step(pCsr->pStmt) ){
+        pTab->bLock--;
         return SQLITE_OK;
       }else{
+        pTab->bLock--;
         rc = sqlite3_reset(pCsr->pStmt);
         if( rc==SQLITE_OK && ((Fts3Table *)pCsr->base.pVtab)->zContentTbl==0 ){
           /* If no row was found and no error has occurred, then the %_content
@@ -1850,6 +1898,7 @@ static int fts3ScanInteriorNode(
   i64 nAlloc = 0;                 /* Size of allocated buffer */
   int isFirstTerm = 1;            /* True when processing first term on page */
   sqlite3_int64 iChild;           /* Block id of child node to descend to */
+  int nBuffer = 0;                /* Total term size */
 
   /* Skip over the 'height' varint that occurs at the start of every 
   ** interior node. Then load the blockid of the left-child of the b-tree
@@ -1874,12 +1923,15 @@ static int fts3ScanInteriorNode(
     int cmp;                      /* memcmp() result */
     int nSuffix;                  /* Size of term suffix */
     int nPrefix = 0;              /* Size of term prefix */
-    int nBuffer;                  /* Total term size */
   
     /* Load the next term on the node into zBuffer. Use realloc() to expand
     ** the size of zBuffer if required.  */
     if( !isFirstTerm ){
       zCsr += fts3GetVarint32(zCsr, &nPrefix);
+      if( nPrefix>nBuffer ){
+        rc = FTS_CORRUPT_VTAB;
+        goto finish_scan;
+      }
     }
     isFirstTerm = 0;
     zCsr += fts3GetVarint32(zCsr, &nSuffix);
@@ -1973,7 +2025,7 @@ static int fts3SelectLeaf(
 
   fts3GetVarint32(zNode, &iHeight);
   rc = fts3ScanInteriorNode(zTerm, nTerm, zNode, nNode, piLeaf, piLeaf2);
-  assert( !piLeaf2 || !piLeaf || rc!=SQLITE_OK || (*piLeaf<=*piLeaf2) );
+  assert_fts3_nc( !piLeaf2 || !piLeaf || rc!=SQLITE_OK || (*piLeaf<=*piLeaf2) );
 
   if( rc==SQLITE_OK && iHeight>1 ){
     char *zBlob = 0;              /* Blob read from %_segments table */
@@ -1993,7 +2045,13 @@ static int fts3SelectLeaf(
       rc = sqlite3Fts3ReadBlock(p, piLeaf?*piLeaf:*piLeaf2, &zBlob, &nBlob, 0);
     }
     if( rc==SQLITE_OK ){
-      rc = fts3SelectLeaf(p, zTerm, nTerm, zBlob, nBlob, piLeaf, piLeaf2);
+      int iNewHeight = 0;
+      fts3GetVarint32(zBlob, &iNewHeight);
+      if( iNewHeight>=iHeight ){
+        rc = FTS_CORRUPT_VTAB;
+      }else{
+        rc = fts3SelectLeaf(p, zTerm, nTerm, zBlob, nBlob, piLeaf, piLeaf2);
+      }
     }
     sqlite3_free(zBlob);
   }
@@ -2010,7 +2068,7 @@ static void fts3PutDeltaVarint(
   sqlite3_int64 *piPrev,          /* IN/OUT: Previous value written to list */
   sqlite3_int64 iVal              /* Write this value to the list */
 ){
-  assert( iVal-*piPrev > 0 || (*piPrev==0 && iVal==0) );
+  assert_fts3_nc( iVal-*piPrev > 0 || (*piPrev==0 && iVal==0) );
   *pp += sqlite3Fts3PutVarint(*pp, iVal-*piPrev);
   *piPrev = iVal;
 }
@@ -2127,7 +2185,9 @@ static void fts3ReadNextPos(
   sqlite3_int64 *pi             /* IN/OUT: Value read from position-list */
 ){
   if( (**pp)&0xFE ){
-    fts3GetDeltaVarint(pp, pi);
+    int iVal;
+    *pp += fts3GetVarint32((*pp), &iVal);
+    *pi += iVal;
     *pi -= 2;
   }else{
     *pi = POSITION_LIST_END;
@@ -2207,6 +2267,9 @@ static int fts3PoslistMerge(
       */
       fts3GetDeltaVarint(&p1, &i1);
       fts3GetDeltaVarint(&p2, &i2);
+      if( i1<2 || i2<2 ){
+        break;
+      }
       do {
         fts3PutDeltaVarint(&p, &iPrev, (i1<i2) ? i1 : i2); 
         iPrev -= 2;
@@ -2275,7 +2338,7 @@ static int fts3PoslistPhraseMerge(
   /* Never set both isSaveLeft and isExact for the same invocation. */
   assert( isSaveLeft==0 || isExact==0 );
 
-  assert( p!=0 && *p1!=0 && *p2!=0 );
+  assert_fts3_nc( p!=0 && *p1!=0 && *p2!=0 );
   if( *p1==POS_COLUMN ){ 
     p1++;
     p1 += fts3GetVarint32(p1, &iCol1);
@@ -2448,12 +2511,12 @@ static void fts3GetDeltaVarint3(
   if( *pp>=pEnd ){
     *pp = 0;
   }else{
-    sqlite3_int64 iVal;
-    *pp += sqlite3Fts3GetVarint(*pp, &iVal);
+    u64 iVal;
+    *pp += sqlite3Fts3GetVarintU(*pp, &iVal);
     if( bDescIdx ){
-      *pVal -= iVal;
+      *pVal = (i64)((u64)*pVal - iVal);
     }else{
-      *pVal += iVal;
+      *pVal = (i64)((u64)*pVal + iVal);
     }
   }
 }
@@ -2480,15 +2543,16 @@ static void fts3PutDeltaVarint3(
   int *pbFirst,                   /* IN/OUT: True after first int written */
   sqlite3_int64 iVal              /* Write this value to the list */
 ){
-  sqlite3_int64 iWrite;
+  sqlite3_uint64 iWrite;
   if( bDescIdx==0 || *pbFirst==0 ){
-    iWrite = iVal - *piPrev;
+    assert_fts3_nc( *pbFirst==0 || iVal>=*piPrev );
+    iWrite = (u64)iVal - (u64)*piPrev;
   }else{
-    iWrite = *piPrev - iVal;
+    assert_fts3_nc( *piPrev>=iVal );
+    iWrite = (u64)*piPrev - (u64)iVal;
   }
   assert( *pbFirst || *piPrev==0 );
   assert_fts3_nc( *pbFirst==0 || iWrite>0 );
-  assert( *pbFirst==0 || iWrite>=0 );
   *pp += sqlite3Fts3PutVarint(*pp, iWrite);
   *piPrev = iVal;
   *pbFirst = 1;
@@ -2504,7 +2568,8 @@ static void fts3PutDeltaVarint3(
 ** Using this makes it easier to write code that can merge doclists that are
 ** sorted in either ascending or descending order.
 */
-#define DOCID_CMP(i1, i2) ((bDescDoclist?-1:1) * (i1-i2))
+/* #define DOCID_CMP(i1, i2) ((bDescDoclist?-1:1) * (i64)((u64)i1-i2)) */
+#define DOCID_CMP(i1, i2) ((bDescDoclist?-1:1) * (i1>i2?1:((i1==i2)?0:-1)))
 
 /*
 ** This function does an "OR" merge of two doclists (output contains all
@@ -2918,7 +2983,7 @@ static int fts3SegReaderCursor(
   ** Fts3SegReaderPending might segfault, as the data structures used by 
   ** fts4aux are not completely populated. So it's easiest to filter these
   ** calls out here.  */
-  if( iLevel<0 && p->aIndex ){
+  if( iLevel<0 && p->aIndex && p->iPrevLangid==iLangid ){
     Fts3SegReader *pSeg = 0;
     rc = sqlite3Fts3SegReaderPending(p, iIndex, zTerm, nTerm, isPrefix||isScan, &pSeg);
     if( rc==SQLITE_OK && pSeg ){
@@ -3181,6 +3246,8 @@ static int fts3NextMethod(sqlite3_vtab_cursor *pCursor){
   int rc;
   Fts3Cursor *pCsr = (Fts3Cursor *)pCursor;
   if( pCsr->eSearch==FTS3_DOCID_SEARCH || pCsr->eSearch==FTS3_FULLSCAN_SEARCH ){
+    Fts3Table *pTab = (Fts3Table*)pCursor->pVtab;
+    pTab->bLock++;
     if( SQLITE_ROW!=sqlite3_step(pCsr->pStmt) ){
       pCsr->isEof = 1;
       rc = sqlite3_reset(pCsr->pStmt);
@@ -3188,6 +3255,7 @@ static int fts3NextMethod(sqlite3_vtab_cursor *pCursor){
       pCsr->iPrevId = sqlite3_column_int64(pCsr->pStmt, 0);
       rc = SQLITE_OK;
     }
+    pTab->bLock--;
   }else{
     rc = fts3EvalNext((Fts3Cursor *)pCursor);
   }
@@ -3247,6 +3315,10 @@ static int fts3FilterMethod(
 
   UNUSED_PARAMETER(idxStr);
   UNUSED_PARAMETER(nVal);
+
+  if( p->bLock ){
+    return SQLITE_ERROR;
+  }
 
   eSearch = (idxNum & 0x0000FFFF);
   assert( eSearch>=0 && eSearch<=(FTS3_FULLTEXT_SEARCH+p->nColumn) );
@@ -3319,7 +3391,11 @@ static int fts3FilterMethod(
       );
     }
     if( zSql ){
-      rc = sqlite3_prepare_v3(p->db,zSql,-1,SQLITE_PREPARE_PERSISTENT,&pCsr->pStmt,0);
+      p->bLock++;
+      rc = sqlite3_prepare_v3(
+          p->db,zSql,-1,SQLITE_PREPARE_PERSISTENT,&pCsr->pStmt,0
+      );
+      p->bLock--;
       sqlite3_free(zSql);
     }else{
       rc = SQLITE_NOMEM;
@@ -3403,7 +3479,7 @@ static int fts3ColumnMethod(
         break;
       }else{
         iCol = p->nColumn;
-        /* fall-through */
+        /* no break */ deliberate_fall_through
       }
 
     default:
@@ -3646,9 +3722,13 @@ static void fts3SnippetFunc(
 
   switch( nVal ){
     case 6: nToken = sqlite3_value_int(apVal[5]);
+            /* no break */ deliberate_fall_through
     case 5: iCol = sqlite3_value_int(apVal[4]);
+            /* no break */ deliberate_fall_through
     case 4: zEllipsis = (const char*)sqlite3_value_text(apVal[3]);
+            /* no break */ deliberate_fall_through
     case 3: zEnd = (const char*)sqlite3_value_text(apVal[2]);
+            /* no break */ deliberate_fall_through
     case 2: zStart = (const char*)sqlite3_value_text(apVal[1]);
   }
   if( !zEllipsis || !zEnd || !zStart ){
@@ -4336,7 +4416,7 @@ static int fts3EvalPhraseStart(Fts3Cursor *pCsr, int bOptOk, Fts3Phrase *p){
   int bIncrOk = (bOptOk 
    && pCsr->bDesc==pTab->bDescIdx 
    && p->nToken<=MAX_INCR_PHRASE_TOKENS && p->nToken>0
-#ifdef SQLITE_TEST
+#if defined(SQLITE_DEBUG) || defined(SQLITE_TEST)
    && pTab->bNoIncrDoclist==0
 #endif
   );
@@ -4447,7 +4527,7 @@ void sqlite3Fts3DoclistNext(
 
   assert( nDoclist>0 );
   assert( *pbEof==0 );
-  assert( p || *piDocid==0 );
+  assert_fts3_nc( p || *piDocid==0 );
   assert( !p || (p>=aDoclist && p<=&aDoclist[nDoclist]) );
 
   if( p==0 ){
@@ -4478,15 +4558,16 @@ static void fts3EvalDlPhraseNext(
   u8 *pbEof
 ){
   char *pIter;                            /* Used to iterate through aAll */
-  char *pEnd = &pDL->aAll[pDL->nAll];     /* 1 byte past end of aAll */
+  char *pEnd;                             /* 1 byte past end of aAll */
  
   if( pDL->pNextDocid ){
     pIter = pDL->pNextDocid;
+    assert( pDL->aAll!=0 || pIter==0 );
   }else{
     pIter = pDL->aAll;
   }
 
-  if( pIter>=pEnd ){
+  if( pIter==0 || pIter>=(pEnd = pDL->aAll + pDL->nAll) ){
     /* We have already reached the end of this doclist. EOF. */
     *pbEof = 1;
   }else{
@@ -4858,12 +4939,13 @@ static int fts3EvalAverageDocsize(Fts3Cursor *pCsr, int *pnPage){
     rc = sqlite3Fts3SelectDoctotal(p, &pStmt);
     if( rc!=SQLITE_OK ) return rc;
     a = sqlite3_column_blob(pStmt, 0);
-    assert( a );
-
-    pEnd = &a[sqlite3_column_bytes(pStmt, 0)];
-    a += sqlite3Fts3GetVarint(a, &nDoc);
-    while( a<pEnd ){
-      a += sqlite3Fts3GetVarint(a, &nByte);
+    testcase( a==0 );  /* If %_stat.value set to X'' */
+    if( a ){
+      pEnd = &a[sqlite3_column_bytes(pStmt, 0)];
+      a += sqlite3Fts3GetVarintBounded(a, pEnd, &nDoc);
+      while( a<pEnd ){
+        a += sqlite3Fts3GetVarintBounded(a, pEnd, &nByte);
+      }
     }
     if( nDoc==0 || nByte==0 ){
       sqlite3_reset(pStmt);
@@ -5095,7 +5177,7 @@ static void fts3EvalInvalidatePoslist(Fts3Phrase *pPhrase){
 **
 ** Parameter nNear is passed the NEAR distance of the expression (5 in
 ** the example above). When this function is called, *paPoslist points to
-** the position list, and *pnToken is the number of phrase tokens in, the
+** the position list, and *pnToken is the number of phrase tokens in the
 ** phrase on the other side of the NEAR operator to pPhrase. For example,
 ** if pPhrase refers to the "def ghi" phrase, then *paPoslist points to
 ** the position list associated with phrase "abc".
@@ -5130,10 +5212,12 @@ static int fts3EvalNearTrim(
   );
   if( res ){
     nNew = (int)(pOut - pPhrase->doclist.pList) - 1;
-    assert( pPhrase->doclist.pList[nNew]=='\0' );
-    assert( nNew<=pPhrase->doclist.nList && nNew>0 );
-    memset(&pPhrase->doclist.pList[nNew], 0, pPhrase->doclist.nList - nNew);
-    pPhrase->doclist.nList = nNew;
+    if( nNew>=0 ){
+      assert( pPhrase->doclist.pList[nNew]=='\0' );
+      assert( nNew<=pPhrase->doclist.nList && nNew>0 );
+      memset(&pPhrase->doclist.pList[nNew], 0, pPhrase->doclist.nList - nNew);
+      pPhrase->doclist.nList = nNew;
+    }
     *paPoslist = pPhrase->doclist.pList;
     *pnToken = pPhrase->nToken;
   }
@@ -5242,6 +5326,7 @@ static void fts3EvalNextRow(
                 fts3EvalNextRow(pCsr, pLeft, pRc);
               }
             }
+            pRight->bEof = pLeft->bEof = 1;
           }
         }
         break;
@@ -5484,7 +5569,10 @@ static int fts3EvalTestExpr(
         }else
 #endif
         {
-          bHit = (pExpr->bEof==0 && pExpr->iDocid==pCsr->iPrevId);
+          bHit = ( 
+              pExpr->bEof==0 && pExpr->iDocid==pCsr->iPrevId
+           && pExpr->pPhrase->doclist.nList>0
+          );
         }
         break;
       }
@@ -5747,7 +5835,8 @@ static int fts3EvalGatherStats(
       fts3EvalRestart(pCsr, pRoot, &rc);
       do {
         fts3EvalNextRow(pCsr, pRoot, &rc);
-        assert( pRoot->bEof==0 );
+        assert_fts3_nc( pRoot->bEof==0 );
+        if( pRoot->bEof ) rc = FTS_CORRUPT_VTAB;
       }while( pRoot->iDocid!=iDocid && rc==SQLITE_OK );
     }
   }

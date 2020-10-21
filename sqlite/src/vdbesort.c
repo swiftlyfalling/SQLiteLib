@@ -815,8 +815,8 @@ static int vdbeSorterCompareText(
   int n2;
   int res;
 
-  getVarint32(&p1[1], n1);
-  getVarint32(&p2[1], n2);
+  getVarint32NR(&p1[1], n1);
+  getVarint32NR(&p2[1], n2);
   res = memcmp(v1, v2, (MIN(n1, n2) - 13)/2);
   if( res==0 ){
     res = n1 - n2;
@@ -1396,20 +1396,16 @@ static SorterCompare vdbeSorterGetCompare(VdbeSorter *p){
 */
 static int vdbeSorterSort(SortSubtask *pTask, SorterList *pList){
   int i;
-  SorterRecord **aSlot;
   SorterRecord *p;
   int rc;
+  SorterRecord *aSlot[64];
 
   rc = vdbeSortAllocUnpacked(pTask);
   if( rc!=SQLITE_OK ) return rc;
 
   p = pList->pList;
   pTask->xCompare = vdbeSorterGetCompare(pTask->pSorter);
-
-  aSlot = (SorterRecord **)sqlite3MallocZero(64 * sizeof(SorterRecord *));
-  if( !aSlot ){
-    return SQLITE_NOMEM_BKPT;
-  }
+  memset(aSlot, 0, sizeof(aSlot));
 
   while( p ){
     SorterRecord *pNext;
@@ -1434,13 +1430,12 @@ static int vdbeSorterSort(SortSubtask *pTask, SorterList *pList){
   }
 
   p = 0;
-  for(i=0; i<64; i++){
+  for(i=0; i<ArraySize(aSlot); i++){
     if( aSlot[i]==0 ) continue;
     p = p ? vdbeSorterMerge(pTask, p, aSlot[i]) : aSlot[i];
   }
   pList->pList = p;
 
-  sqlite3_free(aSlot);
   assert( pTask->pUnpacked->errCode==SQLITE_OK 
        || pTask->pUnpacked->errCode==SQLITE_NOMEM 
   );
@@ -1778,7 +1773,7 @@ int sqlite3VdbeSorterWrite(
 
   assert( pCsr->eCurType==CURTYPE_SORTER );
   pSorter = pCsr->uc.pSorter;
-  getVarint32((const u8*)&pVal->z[1], t);
+  getVarint32NR((const u8*)&pVal->z[1], t);
   if( t>0 && t<10 && t!=7 ){
     pSorter->typeMask &= SORTER_TYPE_INTEGER;
   }else if( t>10 && (t & 0x01) ){

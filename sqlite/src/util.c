@@ -17,7 +17,9 @@
 */
 #include "sqliteInt.h"
 #include <stdarg.h>
+#ifndef SQLITE_OMIT_FLOATING_POINT
 #include <math.h>
+#endif
 
 /*
 ** Routine needed to support the testcase() macro.
@@ -192,6 +194,7 @@ void sqlite3ErrorMsg(Parse *pParse, const char *zFormat, ...){
     sqlite3DbFree(db, pParse->zErrMsg);
     pParse->zErrMsg = zMsg;
     pParse->rc = SQLITE_ERROR;
+    pParse->pWith = 0;
   }
 }
 
@@ -315,6 +318,19 @@ int sqlite3_strnicmp(const char *zLeft, const char *zRight, int N){
 }
 
 /*
+** Compute an 8-bit hash on a string that is insensitive to case differences
+*/
+u8 sqlite3StrIHash(const char *z){
+  u8 h = 0;
+  if( z==0 ) return 0;
+  while( z[0] ){
+    h += UpperToLower[(unsigned char)z[0]];
+    z++;
+  }
+  return h;
+}
+
+/*
 ** Compute 10 to the E-th power.  Examples:  E==1 results in 10.
 ** E==2 results in 100.  E==50 results in 1.0e50.
 **
@@ -382,10 +398,13 @@ static LONGDOUBLE_TYPE sqlite3Pow10(int E){
 ** returns FALSE but it still converts the prefix and writes the result
 ** into *pResult.
 */
+#if defined(_MSC_VER)
+#pragma warning(disable : 4756)
+#endif
 int sqlite3AtoF(const char *z, double *pResult, int length, u8 enc){
 #ifndef SQLITE_OMIT_FLOATING_POINT
   int incr;
-  const char *zEnd = z + length;
+  const char *zEnd;
   /* sign * significand * (10 ^ (esign * exponent)) */
   int sign = 1;    /* sign of significand */
   i64 s = 0;       /* significand */
@@ -399,12 +418,15 @@ int sqlite3AtoF(const char *z, double *pResult, int length, u8 enc){
 
   assert( enc==SQLITE_UTF8 || enc==SQLITE_UTF16LE || enc==SQLITE_UTF16BE );
   *pResult = 0.0;   /* Default return value, in case of an error */
+  if( length==0 ) return 0;
 
   if( enc==SQLITE_UTF8 ){
     incr = 1;
+    zEnd = z + length;
   }else{
     int i;
     incr = 2;
+    length &= ~1;
     assert( SQLITE_UTF16LE==2 && SQLITE_UTF16BE==3 );
     testcase( enc==SQLITE_UTF16LE );
     testcase( enc==SQLITE_UTF16BE );
@@ -568,6 +590,33 @@ do_atof_calc:
 #else
   return !sqlite3Atoi64(z, pResult, length, enc);
 #endif /* SQLITE_OMIT_FLOATING_POINT */
+}
+#if defined(_MSC_VER)
+#pragma warning(default : 4756)
+#endif
+
+/*
+** Render an signed 64-bit integer as text.  Store the result in zOut[].
+**
+** The caller must ensure that zOut[] is at least 21 bytes in size.
+*/
+void sqlite3Int64ToText(i64 v, char *zOut){
+  int i;
+  u64 x;
+  char zTemp[22];
+  if( v<0 ){
+    x = (v==SMALLEST_INT64) ? ((u64)1)<<63 : (u64)-v;
+  }else{
+    x = v;
+  }
+  i = sizeof(zTemp)-2;
+  zTemp[sizeof(zTemp)-1] = 0;
+  do{
+    zTemp[i--] = (x%10) + '0';
+    x = x/10;
+  }while( x );
+  if( v<0 ) zTemp[i--] = '-';
+  memcpy(zOut, &zTemp[i+1], sizeof(zTemp)-1-i);
 }
 
 /*
@@ -810,8 +859,26 @@ int sqlite3GetInt32(const char *zNum, int *pValue){
 */
 int sqlite3Atoi(const char *z){
   int x = 0;
-  if( z ) sqlite3GetInt32(z, &x);
+  sqlite3GetInt32(z, &x);
   return x;
+}
+
+/*
+** Try to convert z into an unsigned 32-bit integer.  Return true on
+** success and false if there is an error.
+**
+** Only decimal notation is accepted.
+*/
+int sqlite3GetUInt32(const char *z, u32 *pI){
+  u64 v = 0;
+  int i;
+  for(i=0; sqlite3Isdigit(z[i]); i++){
+    v = v*10 + z[i] - '0';
+    if( v>4294967296LL ){ *pI = 0; return 0; }
+  }
+  if( i==0 || z[i]!=0 ){ *pI = 0; return 0; }
+  *pI = (u32)v;
+  return 1;
 }
 
 /*
@@ -1116,8 +1183,7 @@ u8 sqlite3GetVarint32(const unsigned char *p, u32 *v){
     u64 v64;
     u8 n;
 
-    p -= 2;
-    n = sqlite3GetVarint(p, &v64);
+    n = sqlite3GetVarint(p-2, &v64);
     assert( n>3 && n<=9 );
     if( (v64 & SQLITE_MAX_U32)!=v64 ){
       *v = 0xffffffff;
@@ -1244,7 +1310,7 @@ u8 sqlite3HexToInt(int h){
   return (u8)(h & 0xf);
 }
 
-#if !defined(SQLITE_OMIT_BLOB_LITERAL) || defined(SQLITE_HAS_CODEC)
+#if !defined(SQLITE_OMIT_BLOB_LITERAL)
 /*
 ** Convert a BLOB literal of the form "x'hhhhhh'" into its binary
 ** value.  Return a pointer to its binary value.  Space to hold the
@@ -1265,7 +1331,7 @@ void *sqlite3HexToBlob(sqlite3 *db, const char *z, int n){
   }
   return zBlob;
 }
-#endif /* !SQLITE_OMIT_BLOB_LITERAL || SQLITE_HAS_CODEC */
+#endif /* !SQLITE_OMIT_BLOB_LITERAL */
 
 /*
 ** Log an error that is an API call on a connection pointer that should

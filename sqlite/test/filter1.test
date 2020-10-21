@@ -184,5 +184,42 @@ do_execsql_test 5.3 {
   SELECT count(*) FILTER (WHERE b>2) OVER (ORDER BY b) FROM (SELECT * FROM t1) 
 } {0 1}
 
-finish_test
+#-------------------------------------------------------------------------
+reset_db
+do_execsql_test 6.0 {
+  CREATE TABLE t1(a,b);
+  INSERT INTO t1 VALUES(1,1);
+  INSERT INTO t1 VALUES(2,2);
+  CREATE TABLE t2(x,y);
+  INSERT INTO t2 VALUES(1,1);
+}
 
+do_execsql_test 6.1 {
+  SELECT (SELECT COUNT(a) FILTER(WHERE x) FROM t2) FROM t1;
+} {1 1}
+do_execsql_test 6.2 {
+  SELECT (SELECT COUNT(a+x) FROM t2) FROM t1;
+} {1 1}
+do_execsql_test 6.3 {
+  SELECT (SELECT COUNT(a) FROM t2) FROM t1;
+} {2}
+
+#-------------------------------------------------------------------------
+reset_db
+do_execsql_test 7.0 {
+  CREATE TABLE t1(a INTEGER PRIMARY KEY, b);
+  INSERT INTO t1 VALUES(321, 100000);
+  INSERT INTO t1 VALUES(111, 110000);
+  INSERT INTO t1 VALUES(444, 120000);
+  INSERT INTO t1 VALUES(222, 130000);
+}
+
+do_execsql_test 7.1 {
+  SELECT max(a), max(a) FILTER (WHERE b<12345), b FROM t1;
+} {
+  444 {} 120000
+}
+
+
+
+finish_test

@@ -104,16 +104,25 @@ int sqlite3VdbeCheckMemInvariants(Mem *p){
 static void vdbeMemRenderNum(int sz, char *zBuf, Mem *p){
   StrAccum acc;
   assert( p->flags & (MEM_Int|MEM_Real|MEM_IntReal) );
-  sqlite3StrAccumInit(&acc, 0, zBuf, sz, 0);
+  assert( sz>22 );
   if( p->flags & MEM_Int ){
-    sqlite3_str_appendf(&acc, "%lld", p->u.i);
-  }else if( p->flags & MEM_IntReal ){
-    sqlite3_str_appendf(&acc, "%!.15g", (double)p->u.i);
+#if GCC_VERSION>=7000000
+    /* Work-around for GCC bug
+    ** https://gcc.gnu.org/bugzilla/show_bug.cgi?id=96270 */
+    i64 x;
+    assert( (p->flags&MEM_Int)*2==sizeof(x) );
+    memcpy(&x, (char*)&p->u, (p->flags&MEM_Int)*2);
+    sqlite3Int64ToText(x, zBuf);
+#else
+    sqlite3Int64ToText(p->u.i, zBuf);
+#endif
   }else{
-    sqlite3_str_appendf(&acc, "%!.15g", p->u.r);
+    sqlite3StrAccumInit(&acc, 0, zBuf, sz, 0);
+    sqlite3_str_appendf(&acc, "%!.15g", 
+         (p->flags & MEM_IntReal)!=0 ? (double)p->u.i : p->u.r);
+    assert( acc.zText==zBuf && acc.mxAlloc<=0 );
+    zBuf[acc.nChar] = 0; /* Fast version of sqlite3StrAccumFinish(&acc) */
   }
-  assert( acc.zText==zBuf && acc.mxAlloc<=0 );
-  zBuf[acc.nChar] = 0; /* Fast version of sqlite3StrAccumFinish(&acc) */
 }
 
 #ifdef SQLITE_DEBUG
@@ -460,15 +469,11 @@ int sqlite3VdbeMemFinalize(Mem *pMem, FuncDef *pFunc){
 #ifndef SQLITE_OMIT_WINDOWFUNC
 int sqlite3VdbeMemAggValue(Mem *pAccum, Mem *pOut, FuncDef *pFunc){
   sqlite3_context ctx;
-  Mem t;
   assert( pFunc!=0 );
   assert( pFunc->xValue!=0 );
   assert( (pAccum->flags & MEM_Null)!=0 || pFunc==pAccum->u.pDef );
   assert( pAccum->db==0 || sqlite3_mutex_held(pAccum->db->mutex) );
   memset(&ctx, 0, sizeof(ctx));
-  memset(&t, 0, sizeof(t));
-  t.flags = MEM_Null;
-  t.db = pAccum->db;
   sqlite3VdbeMemSetNull(pOut);
   ctx.pOut = pOut;
   ctx.pMem = pAccum;
@@ -594,8 +599,7 @@ i64 sqlite3VdbeIntValue(Mem *pMem){
     return pMem->u.i;
   }else if( flags & MEM_Real ){
     return doubleToInt64(pMem->u.r);
-  }else if( flags & (MEM_Str|MEM_Blob) ){
-    assert( pMem->z || pMem->n==0 );
+  }else if( (flags & (MEM_Str|MEM_Blob))!=0 && pMem->z!=0 ){
     return memIntValue(pMem);
   }else{
     return 0;
@@ -752,8 +756,8 @@ int sqlite3VdbeMemNumerify(Mem *pMem){
 ** affinity even if that results in loss of data.  This routine is
 ** used (for example) to implement the SQL "cast()" operator.
 */
-void sqlite3VdbeMemCast(Mem *pMem, u8 aff, u8 encoding){
-  if( pMem->flags & MEM_Null ) return;
+int sqlite3VdbeMemCast(Mem *pMem, u8 aff, u8 encoding){
+  if( pMem->flags & MEM_Null ) return SQLITE_OK;
   switch( aff ){
     case SQLITE_AFF_BLOB: {   /* Really a cast to BLOB */
       if( (pMem->flags & MEM_Blob)==0 ){
@@ -784,9 +788,10 @@ void sqlite3VdbeMemCast(Mem *pMem, u8 aff, u8 encoding){
       sqlite3ValueApplyAffinity(pMem, SQLITE_AFF_TEXT, encoding);
       assert( pMem->flags & MEM_Str || pMem->db->mallocFailed );
       pMem->flags &= ~(MEM_Int|MEM_Real|MEM_IntReal|MEM_Blob|MEM_Zero);
-      break;
+      return sqlite3VdbeChangeEncoding(pMem, encoding);
     }
   }
+  return SQLITE_OK;
 }
 
 /*
@@ -952,25 +957,27 @@ int sqlite3VdbeMemTooBig(Mem *p){
 ** its link to a shallow copy and by marking any current shallow
 ** copies of this cell as invalid.
 **
-** This is used for testing and debugging only - to make sure shallow
-** copies are not misused.
+** This is used for testing and debugging only - to help ensure that shallow
+** copies (created by OP_SCopy) are not misused.
 */
 void sqlite3VdbeMemAboutToChange(Vdbe *pVdbe, Mem *pMem){
   int i;
   Mem *pX;
-  for(i=0, pX=pVdbe->aMem; i<pVdbe->nMem; i++, pX++){
+  for(i=1, pX=pVdbe->aMem+1; i<pVdbe->nMem; i++, pX++){
     if( pX->pScopyFrom==pMem ){
-      /* If pX is marked as a shallow copy of pMem, then verify that
+      u16 mFlags;
+      if( pVdbe->db->flags & SQLITE_VdbeTrace ){
+        sqlite3DebugPrintf("Invalidate R[%d] due to change in R[%d]\n",
+          (int)(pX - pVdbe->aMem), (int)(pMem - pVdbe->aMem));
+      }
+      /* If pX is marked as a shallow copy of pMem, then try to verify that
       ** no significant changes have been made to pX since the OP_SCopy.
       ** A significant change would indicated a missed call to this
       ** function for pX.  Minor changes, such as adding or removing a
       ** dual type, are allowed, as long as the underlying value is the
       ** same. */
-      u16 mFlags = pMem->flags & pX->flags & pX->mScopyFlags;
+      mFlags = pMem->flags & pX->flags & pX->mScopyFlags;
       assert( (mFlags&(MEM_Int|MEM_IntReal))==0 || pMem->u.i==pX->u.i );
-      assert( (mFlags&MEM_Real)==0 || pMem->u.r==pX->u.r );
-      assert( (mFlags&MEM_Str)==0  || (pMem->n==pX->n && pMem->z==pX->z) );
-      assert( (mFlags&MEM_Blob)==0  || sqlite3BlobCompare(pMem,pX)==0 );
       
       /* pMem is the register that is changing.  But also mark pX as
       ** undefined so that we can quickly detect the shallow-copy error */
@@ -981,7 +988,6 @@ void sqlite3VdbeMemAboutToChange(Vdbe *pVdbe, Mem *pMem){
   pMem->pScopyFrom = 0;
 }
 #endif /* SQLITE_DEBUG */
-
 
 /*
 ** Make an shallow copy of pFrom into pTo.  Prior contents of
@@ -1128,10 +1134,19 @@ int sqlite3VdbeMemSetStr(
 
   pMem->n = nByte;
   pMem->flags = flags;
-  pMem->enc = (enc==0 ? SQLITE_UTF8 : enc);
+  if( enc ){
+    pMem->enc = enc;
+#ifdef SQLITE_ENABLE_SESSION
+  }else if( pMem->db==0 ){
+    pMem->enc = SQLITE_UTF8;
+#endif
+  }else{
+    assert( pMem->db!=0 );
+    pMem->enc = ENC(pMem->db);
+  }
 
 #ifndef SQLITE_OMIT_UTF16
-  if( pMem->enc!=SQLITE_UTF8 && sqlite3VdbeMemHandleBom(pMem) ){
+  if( enc>SQLITE_UTF8 && sqlite3VdbeMemHandleBom(pMem) ){
     return SQLITE_NOMEM_BKPT;
   }
 #endif
@@ -1158,7 +1173,7 @@ int sqlite3VdbeMemSetStr(
 ** If this routine fails for any reason (malloc returns NULL or unable
 ** to read from the disk) then the pMem is left in an inconsistent state.
 */
-static SQLITE_NOINLINE int vdbeMemFromBtreeResize(
+int sqlite3VdbeMemFromBtree(
   BtCursor *pCur,   /* Cursor pointing at record to retrieve. */
   u32 offset,       /* Offset from the start of data to return bytes from. */
   u32 amt,          /* Number of bytes to return. */
@@ -1181,13 +1196,11 @@ static SQLITE_NOINLINE int vdbeMemFromBtreeResize(
   }
   return rc;
 }
-int sqlite3VdbeMemFromBtree(
+int sqlite3VdbeMemFromBtreeZeroOffset(
   BtCursor *pCur,   /* Cursor pointing at record to retrieve. */
-  u32 offset,       /* Offset from the start of data to return bytes from. */
   u32 amt,          /* Number of bytes to return. */
   Mem *pMem         /* OUT: Return data in this Mem structure. */
 ){
-  char *zData;        /* Data from the btree layer */
   u32 available = 0;  /* Number of bytes available on the local btree page */
   int rc = SQLITE_OK; /* Return code */
 
@@ -1197,15 +1210,14 @@ int sqlite3VdbeMemFromBtree(
   /* Note: the calls to BtreeKeyFetch() and DataFetch() below assert() 
   ** that both the BtShared and database handle mutexes are held. */
   assert( !sqlite3VdbeMemIsRowSet(pMem) );
-  zData = (char *)sqlite3BtreePayloadFetch(pCur, &available);
-  assert( zData!=0 );
+  pMem->z = (char *)sqlite3BtreePayloadFetch(pCur, &available);
+  assert( pMem->z!=0 );
 
-  if( offset+amt<=available ){
-    pMem->z = &zData[offset];
+  if( amt<=available ){
     pMem->flags = MEM_Blob|MEM_Ephem;
     pMem->n = (int)amt;
   }else{
-    rc = vdbeMemFromBtreeResize(pCur, offset, amt, pMem);
+    rc = sqlite3VdbeMemFromBtree(pCur, 0, amt, pMem);
   }
 
   return rc;
@@ -1548,7 +1560,11 @@ static int valueFromExpr(
       if( pVal->flags & MEM_Real ){
         pVal->u.r = -pVal->u.r;
       }else if( pVal->u.i==SMALLEST_INT64 ){
+#ifndef SQLITE_OMIT_FLOATING_POINT
         pVal->u.r = -(double)SMALLEST_INT64;
+#else
+        pVal->u.r = LARGEST_INT64;
+#endif
         MemSetTypeFlag(pVal, MEM_Real);
       }else{
         pVal->u.i = -pVal->u.i;

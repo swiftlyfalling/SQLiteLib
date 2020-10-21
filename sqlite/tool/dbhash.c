@@ -62,24 +62,9 @@ struct GlobalVars {
  *
  * blk0le() for little-endian and blk0be() for big-endian.
  */
-#if __GNUC__ && (defined(__i386__) || defined(__x86_64__))
-/*
- * GCC by itself only generates left rotates.  Use right rotates if
- * possible to be kinder to dinky implementations with iterative rotate
- * instructions.
- */
-#define SHA_ROT(op, x, k) \
-        ({ unsigned int y; asm(op " %1,%0" : "=r" (y) : "I" (k), "0" (x)); y; })
-#define rol(x,k) SHA_ROT("roll", x, k)
-#define ror(x,k) SHA_ROT("rorl", x, k)
-
-#else
-/* Generic C equivalent */
 #define SHA_ROT(x,l,r) ((x) << (l) | (x) >> (r))
 #define rol(x,k) SHA_ROT(x,k,32-(k))
 #define ror(x,k) SHA_ROT(x,32-(k),k)
-#endif
-
 
 #define blk0le(i) (block[i] = (ror(block[i],8)&0xFF00FF00) \
     |(rol(block[i],8)&0x00FF00FF))
@@ -455,7 +440,7 @@ int main(int argc, char **argv){
       fprintf(stderr, "cannot open database file '%s'\n", zDb);
       continue;
     }
-    rc = sqlite3_exec(g.db, "SELECT * FROM sqlite_master", 0, 0, &zErrMsg);
+    rc = sqlite3_exec(g.db, "SELECT * FROM sqlite_schema", 0, 0, &zErrMsg);
     if( rc || zErrMsg ){
       sqlite3_close(g.db);
       g.db = 0;
@@ -469,7 +454,7 @@ int main(int argc, char **argv){
     /* Hash table content */
     if( !omitContent ){
       pStmt = db_prepare(
-        "SELECT name FROM sqlite_master\n"
+        "SELECT name FROM sqlite_schema\n"
         " WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
         "   AND name NOT LIKE 'sqlite_%%'\n"
         "   AND name LIKE '%q'\n"
@@ -491,7 +476,7 @@ int main(int argc, char **argv){
     /* Hash the database schema */
     if( !omitSchema ){
       hash_one_query(
-         "SELECT type, name, tbl_name, sql FROM sqlite_master\n"
+         "SELECT type, name, tbl_name, sql FROM sqlite_schema\n"
          " WHERE tbl_name LIKE '%q'\n"
          " ORDER BY name COLLATE nocase;\n",
          zLike
