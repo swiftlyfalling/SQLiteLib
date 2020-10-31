@@ -655,20 +655,6 @@ static int SQLITE_TCLAPI test_key(
   int argc,              /* Number of arguments */
   char **argv            /* Text of each argument */
 ){
-#if defined(SQLITE_HAS_CODEC) && !defined(SQLITE_OMIT_CODEC_FROM_TCL)
-  sqlite3 *db;
-  const char *zKey;
-  int nKey;
-  if( argc!=3 ){
-    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
-       " FILENAME\"", 0);
-    return TCL_ERROR;
-  }
-  if( getDbPointer(interp, argv[1], &db) ) return TCL_ERROR;
-  zKey = argv[2];
-  nKey = strlen(zKey);
-  sqlite3_key(db, zKey, nKey);
-#endif
   return TCL_OK;
 }
 
@@ -683,20 +669,6 @@ static int SQLITE_TCLAPI test_rekey(
   int argc,              /* Number of arguments */
   char **argv            /* Text of each argument */
 ){
-#ifdef SQLITE_HAS_CODEC
-  sqlite3 *db;
-  const char *zKey;
-  int nKey;
-  if( argc!=3 ){
-    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
-       " FILENAME\"", 0);
-    return TCL_ERROR;
-  }
-  if( getDbPointer(interp, argv[1], &db) ) return TCL_ERROR;
-  zKey = argv[2];
-  nKey = strlen(zKey);
-  sqlite3_rekey(db, zKey, nKey);
-#endif
   return TCL_OK;
 }
 
@@ -4658,7 +4630,7 @@ static int SQLITE_TCLAPI test_open_v2(
       { "SQLITE_OPEN_MAIN_JOURNAL", SQLITE_OPEN_MAIN_JOURNAL },
       { "SQLITE_OPEN_TEMP_JOURNAL", SQLITE_OPEN_TEMP_JOURNAL },
       { "SQLITE_OPEN_SUBJOURNAL", SQLITE_OPEN_SUBJOURNAL },
-      { "SQLITE_OPEN_MASTER_JOURNAL", SQLITE_OPEN_MASTER_JOURNAL },
+      { "SQLITE_OPEN_SUPER_JOURNAL", SQLITE_OPEN_SUPER_JOURNAL },
       { "SQLITE_OPEN_NOMUTEX", SQLITE_OPEN_NOMUTEX },
       { "SQLITE_OPEN_FULLMUTEX", SQLITE_OPEN_FULLMUTEX },
       { "SQLITE_OPEN_SHAREDCACHE", SQLITE_OPEN_SHAREDCACHE },
@@ -5522,6 +5494,33 @@ static int SQLITE_TCLAPI test_soft_heap_limit(
     if( Tcl_GetWideIntFromObj(interp, objv[1], &N) ) return TCL_ERROR;
   }
   amt = sqlite3_soft_heap_limit64(N);
+  Tcl_SetObjResult(interp, Tcl_NewWideIntObj(amt));
+  return TCL_OK;
+}
+
+/*
+** Usage:  sqlite3_hard_heap_limit ?N?
+**
+** Query or set the hard heap limit for the current thread.  The
+** limit is only changed if the N is present.  The previous limit
+** is returned.
+*/
+static int SQLITE_TCLAPI test_hard_heap_limit(
+  void * clientData,
+  Tcl_Interp *interp,
+  int objc,
+  Tcl_Obj *CONST objv[]
+){
+  sqlite3_int64 amt;
+  Tcl_WideInt N = -1;
+  if( objc!=1 && objc!=2 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "?N?");
+    return TCL_ERROR;
+  }
+  if( objc==2 ){
+    if( Tcl_GetWideIntFromObj(interp, objv[1], &N) ) return TCL_ERROR;
+  }
+  amt = sqlite3_hard_heap_limit64(N);
   Tcl_SetObjResult(interp, Tcl_NewWideIntObj(amt));
   return TCL_OK;
 }
@@ -6439,6 +6438,30 @@ static int SQLITE_TCLAPI prng_seed(
 }
 
 /*
+** tclcmd:  extra_schema_checks BOOLEAN
+**
+** Enable or disable schema checks when parsing the sqlite_schema file.
+** This is always enabled in production, but it is sometimes useful to
+** disable the checks in order to make some internal error states reachable
+** for testing.
+*/
+static int SQLITE_TCLAPI extra_schema_checks(
+  ClientData clientData, /* Pointer to sqlite3_enable_XXX function */
+  Tcl_Interp *interp,    /* The TCL interpreter that invoked this command */
+  int objc,              /* Number of arguments */
+  Tcl_Obj *CONST objv[]  /* Command arguments */
+){
+  int i = 0;
+  if( objc!=2 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "BOOLEAN");
+    return TCL_ERROR;
+  }
+  if( Tcl_GetBooleanFromObj(interp,objv[1],&i) ) return TCL_ERROR;
+  sqlite3_test_control(SQLITE_TESTCTRL_EXTRA_SCHEMA_CHECKS, i);
+  return TCL_OK;
+}
+
+/*
 ** tclcmd:  database_may_be_corrupt
 **
 ** Indicate that database files might be corrupt. In other words, set the normal
@@ -6845,7 +6868,16 @@ static int SQLITE_TCLAPI test_test_control(
 
   iFlag = aVerb[iVerb].i;
   switch( iFlag ){
-    case SQLITE_TESTCTRL_INTERNAL_FUNCTIONS:
+    case SQLITE_TESTCTRL_INTERNAL_FUNCTIONS: {
+      sqlite3 *db = 0;
+      if( objc!=3 ){
+        Tcl_WrongNumArgs(interp, 2, objv, "DB");
+        return TCL_ERROR;
+      }
+      if( getDbPointer(interp, Tcl_GetString(objv[2]), &db) ) return TCL_ERROR;
+      sqlite3_test_control(SQLITE_TESTCTRL_INTERNAL_FUNCTIONS, db);
+      break;
+    }
     case SQLITE_TESTCTRL_LOCALTIME_FAULT: {
       int val;
       if( objc!=3 ){
@@ -7249,6 +7281,7 @@ static int SQLITE_TCLAPI tclLoadStaticExtensionCmd(
   extern int sqlite3_eval_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_explain_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_fileio_init(sqlite3*,char**,const sqlite3_api_routines*);
+  extern int sqlite3_decimal_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_fuzzer_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_ieee_init(sqlite3*,char**,const sqlite3_api_routines*);
   extern int sqlite3_nextchar_init(sqlite3*,char**,const sqlite3_api_routines*);
@@ -7274,6 +7307,7 @@ static int SQLITE_TCLAPI tclLoadStaticExtensionCmd(
     { "carray",                sqlite3_carray_init               },
     { "closure",               sqlite3_closure_init              },
     { "csv",                   sqlite3_csv_init                  },
+    { "decimal",               sqlite3_decimal_init              },
     { "eval",                  sqlite3_eval_init                 },
     { "explain",               sqlite3_explain_init              },
     { "fileio",                sqlite3_fileio_init               },
@@ -7682,14 +7716,15 @@ static int SQLITE_TCLAPI test_sqlite3_db_config(
     { "LEGACY_ALTER_TABLE", SQLITE_DBCONFIG_LEGACY_ALTER_TABLE },
     { "DQS_DML",            SQLITE_DBCONFIG_DQS_DML },
     { "DQS_DDL",            SQLITE_DBCONFIG_DQS_DDL },
+    { "LEGACY_FILE_FORMAT", SQLITE_DBCONFIG_LEGACY_FILE_FORMAT },
   };
   int i;
-  int v;
+  int v = 0;
   const char *zSetting;
   sqlite3 *db;
 
-  if( objc!=4 ){
-    Tcl_WrongNumArgs(interp, 1, objv, "DB SETTING VALUE");
+  if( objc!=4 && objc!=3 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "DB SETTING [VALUE]");
     return TCL_ERROR;
   }
   if( getDbPointer(interp, Tcl_GetString(objv[1]), &db) ) return TCL_ERROR;
@@ -7705,7 +7740,11 @@ static int SQLITE_TCLAPI test_sqlite3_db_config(
       Tcl_NewStringObj("unknown sqlite3_db_config setting", -1));
     return TCL_ERROR;
   }
-  if( Tcl_GetIntFromObj(interp, objv[3], &v) ) return TCL_ERROR;
+  if( objc==4 ){
+    if( Tcl_GetIntFromObj(interp, objv[3], &v) ) return TCL_ERROR;
+  }else{
+    v = -1;
+  }
   sqlite3_db_config(db, aSetting[i].eVal, v, &v);
   Tcl_SetObjResult(interp, Tcl_NewIntObj(v));
   return TCL_OK;
@@ -7761,6 +7800,41 @@ static int SQLITE_TCLAPI test_mmap_warm(
     Tcl_SetObjResult(interp, Tcl_NewStringObj(sqlite3ErrName(rc), -1));
     return TCL_OK;
   }
+}
+
+/*
+** Usage:  test_write_db DB OFFSET DATA
+**
+** Obtain the sqlite3_file* object for the database file for the "main" db
+** of handle DB. Then invoke its xWrite method to write data DATA to offset
+** OFFSET.
+*/
+static int SQLITE_TCLAPI test_write_db(
+  void * clientData,
+  Tcl_Interp *interp,
+  int objc,
+  Tcl_Obj *CONST objv[]
+){
+  sqlite3 *db = 0;
+  Tcl_WideInt iOff = 0;
+  const unsigned char *aData = 0;
+  int nData = 0;
+  sqlite3_file *pFile = 0;
+  int rc;
+
+  if( objc!=4 ){
+    Tcl_WrongNumArgs(interp, 1, objv, "DB OFFSET DATA");
+    return TCL_ERROR;
+  }
+  if( getDbPointer(interp, Tcl_GetString(objv[1]), &db) ) return TCL_ERROR;
+  if( Tcl_GetWideIntFromObj(interp, objv[2], &iOff) ) return TCL_ERROR;
+  aData = Tcl_GetByteArrayFromObj(objv[3], &nData);
+
+  sqlite3_file_control(db, "main", SQLITE_FCNTL_FILE_POINTER, (void*)&pFile);
+  rc = pFile->pMethods->xWrite(pFile, aData, nData, iOff);
+
+  Tcl_SetResult(interp, (char *)sqlite3ErrName(rc), TCL_VOLATILE);
+  return TCL_OK;
 }
 
 /*
@@ -7973,6 +8047,8 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
      { "sqlite3_db_filename",           test_db_filename,        0},
      { "sqlite3_db_readonly",           test_db_readonly,        0},
      { "sqlite3_soft_heap_limit",       test_soft_heap_limit,    0},
+     { "sqlite3_soft_heap_limit64",     test_soft_heap_limit,    0},
+     { "sqlite3_hard_heap_limit64",     test_hard_heap_limit,    0},
      { "sqlite3_thread_cleanup",        test_thread_cleanup,     0},
      { "sqlite3_pager_refcounts",       test_pager_refcounts,    0},
 
@@ -7986,6 +8062,7 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
      { "restore_prng_state",            restore_prng_state, 0 },
      { "reset_prng_state",              reset_prng_state,   0 },
      { "prng_seed",                     prng_seed,          0 },
+     { "extra_schema_checks",           extra_schema_checks,    0},
      { "database_never_corrupt",        database_never_corrupt, 0},
      { "database_may_be_corrupt",       database_may_be_corrupt, 0},
      { "optimization_control",          optimization_control,0},
@@ -8124,6 +8201,7 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
      { "sqlite3_mmap_warm",       test_mmap_warm,          0 },
      { "sqlite3_config_sorterref", test_config_sorterref,   0 },
      { "decode_hexdb",             test_decode_hexdb,       0 },
+     { "test_write_db",            test_write_db,           0 },
   };
   static int bitmask_size = sizeof(Bitmask)*8;
   static int longdouble_size = sizeof(LONGDOUBLE_TYPE);
@@ -8149,7 +8227,7 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
 #endif
 #endif
 #if defined(SQLITE_ENABLE_SELECTTRACE)
-  extern int sqlite3SelectTrace;
+  extern u32 sqlite3_unsupported_selecttrace;
 #endif
 
   for(i=0; i<sizeof(aCmd)/sizeof(aCmd[0]); i++){
@@ -8237,8 +8315,8 @@ int Sqlitetest1_Init(Tcl_Interp *interp){
   Tcl_LinkVar(interp, "sqlite_fullsync_count",
       (char*)&sqlite3_fullsync_count, TCL_LINK_INT);
 #if defined(SQLITE_ENABLE_SELECTTRACE)
-  Tcl_LinkVar(interp, "sqlite3SelectTrace",
-      (char*)&sqlite3SelectTrace, TCL_LINK_INT);
+  Tcl_LinkVar(interp, "sqlite3_unsupported_selecttrace",
+      (char*)&sqlite3_unsupported_selecttrace, TCL_LINK_INT);
 #endif
 #if defined(SQLITE_ENABLE_FTS3) && defined(SQLITE_TEST)
   Tcl_LinkVar(interp, "sqlite_fts3_enable_parentheses",

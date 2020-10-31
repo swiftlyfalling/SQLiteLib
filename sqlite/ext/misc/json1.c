@@ -42,6 +42,10 @@ SQLITE_EXTENSION_INIT1
 # define SMALLEST_INT64 (((sqlite3_int64)-1) - LARGEST_INT64)
 #endif
 
+#ifndef deliberate_fall_through
+# define deliberate_fall_through
+#endif
+
 /*
 ** Versions of isspace(), isalnum() and isdigit() to which it is safe
 ** to pass signed char values.
@@ -254,6 +258,7 @@ static int jsonGrow(JsonString *p, u32 N){
 /* Append N bytes from zIn onto the end of the JsonString string.
 */
 static void jsonAppendRaw(JsonString *p, const char *zIn, u32 N){
+  if( N==0 ) return;
   if( (N+p->nUsed >= p->nAlloc) && jsonGrow(p,N)!=0 ) return;
   memcpy(p->zBuf+p->nUsed, zIn, N);
   p->nUsed += N;
@@ -459,7 +464,7 @@ static void jsonRenderNode(
         jsonAppendString(pOut, pNode->u.zJContent, pNode->n);
         break;
       }
-      /* Fall through into the next case */
+      /* no break */ deliberate_fall_through
     }
     case JSON_REAL:
     case JSON_INT: {
@@ -523,6 +528,37 @@ static void jsonReturnJson(
 }
 
 /*
+** Translate a single byte of Hex into an integer.
+** This routine only works if h really is a valid hexadecimal
+** character:  0..9a..fA..F
+*/
+static u8 jsonHexToInt(int h){
+  assert( (h>='0' && h<='9') ||  (h>='a' && h<='f') ||  (h>='A' && h<='F') );
+#ifdef SQLITE_EBCDIC
+  h += 9*(1&~(h>>4));
+#else
+  h += 9*(1&(h>>6));
+#endif
+  return (u8)(h & 0xf);
+}
+
+/*
+** Convert a 4-byte hex string into an integer
+*/
+static u32 jsonHexToInt4(const char *z){
+  u32 v;
+  assert( safe_isxdigit(z[0]) );
+  assert( safe_isxdigit(z[1]) );
+  assert( safe_isxdigit(z[2]) );
+  assert( safe_isxdigit(z[3]) );
+  v = (jsonHexToInt(z[0])<<12)
+    + (jsonHexToInt(z[1])<<8)
+    + (jsonHexToInt(z[2])<<4)
+    + jsonHexToInt(z[3]);
+  return v;
+}
+
+/*
 ** Make the JsonNode the return value of the function.
 */
 static void jsonReturn(
@@ -569,7 +605,7 @@ static void jsonReturn(
       sqlite3_result_int64(pCtx, i);
       int_done:
       break;
-      int_as_real: /* fall through to real */;
+      int_as_real: i=0; /* no break */ deliberate_fall_through
     }
     case JSON_REAL: {
       double r;
@@ -615,15 +651,8 @@ static void jsonReturn(
           }else{
             c = z[++i];
             if( c=='u' ){
-              u32 v = 0, k;
-              for(k=0; k<4; i++, k++){
-                assert( i<n-2 );
-                c = z[i+1];
-                assert( safe_isxdigit(c) );
-                if( c<='9' ) v = v*16 + c - '0';
-                else if( c<='F' ) v = v*16 + c - 'A' + 10;
-                else v = v*16 + c - 'a' + 10;
-              }
+              u32 v = jsonHexToInt4(z+i+1);
+              i += 4;
               if( v==0 ) break;
               if( v<=0x7f ){
                 zOut[j++] = (char)v;
@@ -631,9 +660,25 @@ static void jsonReturn(
                 zOut[j++] = (char)(0xc0 | (v>>6));
                 zOut[j++] = 0x80 | (v&0x3f);
               }else{
-                zOut[j++] = (char)(0xe0 | (v>>12));
-                zOut[j++] = 0x80 | ((v>>6)&0x3f);
-                zOut[j++] = 0x80 | (v&0x3f);
+                u32 vlo;
+                if( (v&0xfc00)==0xd800
+                  && i<n-6
+                  && z[i+1]=='\\'
+                  && z[i+2]=='u'
+                  && ((vlo = jsonHexToInt4(z+i+3))&0xfc00)==0xdc00
+                ){
+                  /* We have a surrogate pair */
+                  v = ((v&0x3ff)<<10) + (vlo&0x3ff) + 0x10000;
+                  i += 6;
+                  zOut[j++] = 0xf0 | (v>>18);
+                  zOut[j++] = 0x80 | ((v>>12)&0x3f);
+                  zOut[j++] = 0x80 | ((v>>6)&0x3f);
+                  zOut[j++] = 0x80 | (v&0x3f);
+                }else{
+                  zOut[j++] = 0xe0 | (v>>12);
+                  zOut[j++] = 0x80 | ((v>>6)&0x3f);
+                  zOut[j++] = 0x80 | (v&0x3f);
+                }
               }
             }else{
               if( c=='b' ){
@@ -1136,18 +1181,49 @@ static JsonNode *jsonLookupStep(
       }
       return pNode;
     }
-  }else if( zPath[0]=='[' && safe_isdigit(zPath[1]) ){
-    if( pRoot->eType!=JSON_ARRAY ) return 0;
+  }else if( zPath[0]=='[' ){
     i = 0;
     j = 1;
     while( safe_isdigit(zPath[j]) ){
       i = i*10 + zPath[j] - '0';
       j++;
     }
-    if( zPath[j]!=']' ){
-      *pzErr = zPath;
-      return 0;
+    if( j<2 || zPath[j]!=']' ){
+      if( zPath[1]=='#' ){
+        JsonNode *pBase = pRoot;
+        int iBase = iRoot;
+        if( pRoot->eType!=JSON_ARRAY ) return 0;
+        for(;;){
+          while( j<=pBase->n ){
+            if( (pBase[j].jnFlags & JNODE_REMOVE)==0 ) i++;
+            j += jsonNodeSize(&pBase[j]);
+          }
+          if( (pBase->jnFlags & JNODE_APPEND)==0 ) break;
+          iBase += pBase->u.iAppend;
+          pBase = &pParse->aNode[iBase];
+          j = 1;
+        }
+        j = 2;
+        if( zPath[2]=='-' && safe_isdigit(zPath[3]) ){
+          unsigned int x = 0;
+          j = 3;
+          do{
+            x = x*10 + zPath[j] - '0';
+            j++;
+          }while( safe_isdigit(zPath[j]) );
+          if( x>i ) return 0;
+          i -= x;
+        }
+        if( zPath[j]!=']' ){
+          *pzErr = zPath;
+          return 0;
+        }
+      }else{
+        *pzErr = zPath;
+        return 0;
+      }
     }
+    if( pRoot->eType!=JSON_ARRAY ) return 0;
     zPath += j + 1;
     j = 1;
     for(;;){
@@ -2020,6 +2096,7 @@ static int jsonEachConnect(
     pNew = *ppVtab = sqlite3_malloc( sizeof(*pNew) );
     if( pNew==0 ) return SQLITE_NOMEM;
     memset(pNew, 0, sizeof(*pNew));
+    sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   }
   return rc;
 }
@@ -2231,6 +2308,7 @@ static int jsonEachColumn(
       }
       /* For json_each() path and root are the same so fall through
       ** into the root case */
+      /* no break */ deliberate_fall_through
     }
     default: {
       const char *zRoot = p->zRoot;
@@ -2510,16 +2588,19 @@ int sqlite3Json1Init(sqlite3 *db){
     { "json_tree",            &jsonTreeModule               },
   };
 #endif
+  static const int enc = 
+       SQLITE_UTF8 |
+       SQLITE_DETERMINISTIC |
+       SQLITE_INNOCUOUS;
   for(i=0; i<sizeof(aFunc)/sizeof(aFunc[0]) && rc==SQLITE_OK; i++){
-    rc = sqlite3_create_function(db, aFunc[i].zName, aFunc[i].nArg,
-                                 SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+    rc = sqlite3_create_function(db, aFunc[i].zName, aFunc[i].nArg, enc,
                                  (void*)&aFunc[i].flag,
                                  aFunc[i].xFunc, 0, 0);
   }
 #ifndef SQLITE_OMIT_WINDOWFUNC
   for(i=0; i<sizeof(aAgg)/sizeof(aAgg[0]) && rc==SQLITE_OK; i++){
     rc = sqlite3_create_window_function(db, aAgg[i].zName, aAgg[i].nArg,
-                SQLITE_SUBTYPE | SQLITE_UTF8 | SQLITE_DETERMINISTIC, 0,
+                                 SQLITE_SUBTYPE | enc, 0,
                                  aAgg[i].xStep, aAgg[i].xFinal,
                                  aAgg[i].xValue, jsonGroupInverse, 0);
   }

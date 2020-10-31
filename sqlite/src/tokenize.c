@@ -422,6 +422,7 @@ int sqlite3GetToken(const unsigned char *z, int *tokenType){
       }
       /* If the next character is a digit, this is a floating point
       ** number that begins with ".".  Fall thru into the next case */
+      /* no break */ deliberate_fall_through
     }
     case CC_DIGIT: {
       testcase( z[0]=='0' );  testcase( z[0]=='1' );  testcase( z[0]=='2' );
@@ -526,6 +527,7 @@ int sqlite3GetToken(const unsigned char *z, int *tokenType){
 #endif
       /* If it is not a BLOB literal, then it must be an ID, since no
       ** SQL keywords start with the letter 'x'.  Fall through */
+      /* no break */ deliberate_fall_through
     }
     case CC_ID: {
       i = 1;
@@ -568,7 +570,7 @@ int sqlite3RunParser(Parse *pParse, const char *zSql, char **pzErrMsg){
   assert( zSql!=0 );
   mxSqlLen = db->aLimit[SQLITE_LIMIT_SQL_LENGTH];
   if( db->nVdbeActive==0 ){
-    db->u1.isInterrupted = 0;
+    AtomicStore(&db->u1.isInterrupted, 0);
   }
   pParse->rc = SQLITE_OK;
   pParse->zTail = zSql;
@@ -613,7 +615,7 @@ int sqlite3RunParser(Parse *pParse, const char *zSql, char **pzErrMsg){
     if( tokenType>=TK_SPACE ){
       assert( tokenType==TK_SPACE || tokenType==TK_ILLEGAL );
 #endif /* SQLITE_OMIT_WINDOWFUNC */
-      if( db->u1.isInterrupted ){
+      if( AtomicLoad(&db->u1.isInterrupted) ){
         pParse->rc = SQLITE_INTERRUPT;
         break;
       }
@@ -757,7 +759,7 @@ char *sqlite3Normalize(
   int nParen;        /* Number of nested levels of parentheses */
   int iStartIN;      /* Start of RHS of IN operator in z[] */
   int nParenAtIN;    /* Value of nParent at start of RHS of IN operator */
-  int j;             /* Bytes of normalized SQL generated so far */
+  u32 j;             /* Bytes of normalized SQL generated so far */
   sqlite3_str *pStr; /* The normalized SQL string under construction */
 
   db = sqlite3VdbeDb(pVdbe);
@@ -801,7 +803,7 @@ char *sqlite3Normalize(
       }
       case TK_RP: {
         if( iStartIN>0 && nParen==nParenAtIN ){
-          assert( pStr->nChar>=iStartIN );
+          assert( pStr->nChar>=(u32)iStartIN );
           pStr->nChar = iStartIN+1;
           sqlite3_str_append(pStr, "?,?,?", 5);
           iStartIN = 0;

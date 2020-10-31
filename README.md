@@ -8,11 +8,11 @@ If you need a specific version of SQLite, or specific SQLite compilation options
 
 
 
-**Nov 29, 2019: Update SQLite to 3.30.1** ([changelog](https://github.com/swiftlyfalling/SQLiteLib/commits/master)).
+**Oct 31, 2020: Update SQLite to 3.33.0** ([changelog](https://github.com/swiftlyfalling/SQLiteLib/commits/master)).
 
 **Requirements**: iOS 8.0+ / OSX 10.9+, Xcode 7.3+
 
-**SQLite Included:** **[3.30.1](https://www.sqlite.org/releaselog/3_30_1.html)**
+**SQLite Included:** **[3.33.0](https://www.sqlite.org/releaselog/3_30_1.html)**
 
 
 

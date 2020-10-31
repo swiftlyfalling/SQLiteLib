@@ -1139,7 +1139,7 @@ sqlite3 db test.db
 #-------------------------------------------------------------------------
 # Test cases for the testable statements related to the CASE expression.
 #
-# EVIDENCE-OF: R-15199-61389 There are two basic forms of the CASE
+# EVIDENCE-OF: R-57495-24088 There are two fundamental forms of the CASE
 # expression: those with a base expression and those without.
 #
 do_execsql_test e_expr-20.1 {
@@ -1235,11 +1235,11 @@ db nullvalue {}
 # evaluating WHEN terms.
 #
 do_execsql_test e_expr-21.4.1 {
-  SELECT CASE WHEN NULL THEN 'A' WHEN 1 THEN 'B' END
-} {B}
+  SELECT CASE WHEN NULL THEN 'A' WHEN 1 THEN 'B' END, iif(NULL,8,99);
+} {B 99}
 do_execsql_test e_expr-21.4.2 {
-  SELECT CASE WHEN 0 THEN 'A' WHEN NULL THEN 'B' ELSE 'C' END
-} {C}
+  SELECT CASE WHEN 0 THEN 'A' WHEN NULL THEN 'B' ELSE 'C' END, iif(0,8,99);
+} {C 99}
 
 # EVIDENCE-OF: R-38620-19499 In a CASE with a base expression, the base
 # expression is evaluated just once and the result is compared against
@@ -1663,9 +1663,16 @@ do_expr_test e_expr-32.1.4 { CAST('11abc' AS NUMERIC) } integer 11
 do_expr_test e_expr-32.1.5 { CAST('11.1abc' AS NUMERIC) } real 11.1
 do_expr_test e_expr-32.1.6 {CAST( '9.223372036e14' AS NUMERIC)} integer  922337203600000
 do_expr_test e_expr-32.1.7 {CAST('-9.223372036e14' AS NUMERIC)} integer -922337203600000
-do_expr_test e_expr-32.1.8 {CAST( '9.223372036e15' AS NUMERIC)} real     9223372036000000.0
-do_expr_test e_expr-32.1.9 {CAST('-9.223372036e15' AS NUMERIC)} real    -9223372036000000.0
-
+do_test e_expr-32.1.8 {
+  set expr {CAST( '9.223372036e15' AS NUMERIC)}
+  db eval "SELECT typeof($expr) AS type, printf('%.5e',$expr) AS value"  break;
+  list $type $value
+} {real 9.22337e+15}
+do_test e_expr-32.1.9 {
+  set expr {CAST('-9.223372036e15' AS NUMERIC)}
+  db eval "SELECT typeof($expr) AS type, printf('%.5e',$expr) AS value"  break;
+  list $type $value
+} {real -9.22337e+15}
 
 # EVIDENCE-OF: R-50300-26941 Any text input that describes a value
 # outside the range of a 64-bit signed integer yields a REAL result.
@@ -1909,9 +1916,6 @@ foreach {tn sql} {
 # EVIDENCE-OF: R-18318-14995 The value of a subquery expression is the
 # first row of the result from the enclosed SELECT statement.
 #
-# EVIDENCE-OF: R-15900-52156 In other words, an implied "LIMIT 1" is
-# added to the subquery, overriding an explicitly coded LIMIT.
-#
 do_execsql_test e_expr-36.3.1 {
   CREATE TABLE t4(x, y);
   INSERT INTO t4 VALUES(1, 'one');
@@ -1948,39 +1952,39 @@ foreach {tn expr} {
 # 'english' and '0' are all considered to be false.
 #
 do_execsql_test e_expr-37.1 {
-   SELECT CASE WHEN NULL THEN 'true' ELSE 'false' END;
-} {false}
+   SELECT CASE WHEN NULL THEN 'true' ELSE 'false' END, iif(NULL,'true','false');
+} {false false}
 do_execsql_test e_expr-37.2 {
-   SELECT CASE WHEN 0.0 THEN 'true' ELSE 'false' END;
-} {false}
+   SELECT CASE WHEN 0.0 THEN 'true' ELSE 'false' END, iif(0.0,'true','false');
+} {false false}
 do_execsql_test e_expr-37.3 {
-   SELECT CASE WHEN 0 THEN 'true' ELSE 'false' END;
-} {false}
+   SELECT CASE WHEN 0 THEN 'true' ELSE 'false' END, iif(0,'true','false');
+} {false false}
 do_execsql_test e_expr-37.4 {
-   SELECT CASE WHEN 'engligh' THEN 'true' ELSE 'false' END;
-} {false}
+   SELECT CASE WHEN 'engligh' THEN 'true' ELSE 'false' END, iif('engligh','true','false');
+} {false false}
 do_execsql_test e_expr-37.5 {
-   SELECT CASE WHEN '0' THEN 'true' ELSE 'false' END;
-} {false}
+   SELECT CASE WHEN '0' THEN 'true' ELSE 'false' END, iif('0','true','false');
+} {false false}
 
 # EVIDENCE-OF: R-55532-10108 Values 1, 1.0, 0.1, -0.1 and '1english' are
 # considered to be true.
 #
 do_execsql_test e_expr-37.6 {
-   SELECT CASE WHEN 1 THEN 'true' ELSE 'false' END;
-} {true}
+   SELECT CASE WHEN 1 THEN 'true' ELSE 'false' END, iif(1,'true','false');
+} {true true}
 do_execsql_test e_expr-37.7 {
-   SELECT CASE WHEN 1.0 THEN 'true' ELSE 'false' END;
-} {true}
+   SELECT CASE WHEN 1.0 THEN 'true' ELSE 'false' END, iif(1.0,'true','false');
+} {true true}
 do_execsql_test e_expr-37.8 {
-   SELECT CASE WHEN 0.1 THEN 'true' ELSE 'false' END;
-} {true}
+   SELECT CASE WHEN 0.1 THEN 'true' ELSE 'false' END, iif(0.1,'true','false');
+} {true true}
 do_execsql_test e_expr-37.9 {
-   SELECT CASE WHEN -0.1 THEN 'true' ELSE 'false' END;
-} {true}
+   SELECT CASE WHEN -0.1 THEN 'true' ELSE 'false' END, iif(-0.1,'true','false');
+} {true true}
 do_execsql_test e_expr-37.10 {
-   SELECT CASE WHEN '1english' THEN 'true' ELSE 'false' END;
-} {true}
+   SELECT CASE WHEN '1english' THEN 'true' ELSE 'false' END, iif('1engl','true','false');
+} {true true}
 
 
 finish_test
