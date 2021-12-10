@@ -212,26 +212,37 @@ do_eqp_test count-7.2 {
   SELECT count(1) FROM t1;
 } {
   QUERY PLAN
-  `--SCAN TABLE t1 USING COVERING INDEX t1b
+  `--SCAN t1 USING COVERING INDEX t1b
 }
 do_eqp_test count-7.3 {
   SELECT count(1) FROM t1 NOT INDEXED
 } {
   QUERY PLAN
-  `--SCAN TABLE t1
+  `--SCAN t1
 }
 do_eqp_test count-7.3 {
   SELECT count(*) FROM t1;
 } {
   QUERY PLAN
-  `--SCAN TABLE t1 USING COVERING INDEX t1b
+  `--SCAN t1 USING COVERING INDEX t1b
 }
 do_eqp_test count-7.4 {
   SELECT count(*) FROM t1 NOT INDEXED
 } {
   QUERY PLAN
-  `--SCAN TABLE t1
+  `--SCAN t1
 }
+
+do_execsql_test count-8.0 {
+  CREATE TABLE t7(a INT,b TEXT,c BLOB,d REAL);
+  CREATE TABLE t8(a INT,b TEXT,c BLOB,d REAL);
+  CREATE INDEX t8a ON t8(a);
+}
+do_catchsql_test count-8.1 {
+  SELECT * FROM t8 WHERE (a, b) IN (
+      SELECT count(t8.b), count(*) FROM t7 AS ra0 ORDER BY count(*)
+  ) AND t8.b=0; 
+} {1 {misuse of aggregate: count()}}
 
 
 finish_test

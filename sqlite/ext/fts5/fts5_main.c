@@ -22,7 +22,9 @@
 ** assert() conditions in the fts5 code are activated - conditions that are
 ** only true if it is guaranteed that the fts5 database is not corrupt.
 */
+#ifdef SQLITE_DEBUG
 int sqlite3_fts5_may_be_corrupt = 1;
+#endif
 
 
 typedef struct Fts5Auxdata Fts5Auxdata;
@@ -464,6 +466,23 @@ static void fts5SetUniqueFlag(sqlite3_index_info *pIdxInfo){
 #endif
 }
 
+static int fts5UsePatternMatch(
+  Fts5Config *pConfig, 
+  struct sqlite3_index_constraint *p
+){
+  assert( FTS5_PATTERN_GLOB==SQLITE_INDEX_CONSTRAINT_GLOB );
+  assert( FTS5_PATTERN_LIKE==SQLITE_INDEX_CONSTRAINT_LIKE );
+  if( pConfig->ePattern==FTS5_PATTERN_GLOB && p->op==FTS5_PATTERN_GLOB ){
+    return 1;
+  }
+  if( pConfig->ePattern==FTS5_PATTERN_LIKE 
+   && (p->op==FTS5_PATTERN_LIKE || p->op==FTS5_PATTERN_GLOB)
+  ){
+    return 1;
+  }
+  return 0;
+}
+
 /*
 ** Implementation of the xBestIndex method for FTS5 tables. Within the 
 ** WHERE constraint, it searches for the following:
@@ -493,7 +512,9 @@ static void fts5SetUniqueFlag(sqlite3_index_info *pIdxInfo){
 **
 **   Match against table column:            "m"
 **   Match against rank column:             "r"
-**   Match against other column:            "<column-number>"
+**   Match against other column:            "M<column-number>"
+**   LIKE  against other column:            "L<column-number>"
+**   GLOB  against other column:            "G<column-number>"
 **   Equality constraint against the rowid: "="
 **   A < or <= against the rowid:           "<"
 **   A > or >= against the rowid:           ">"
@@ -554,7 +575,7 @@ static int fts5BestIndexMethod(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo){
     return SQLITE_ERROR;
   }
 
-  idxStr = (char*)sqlite3_malloc(pInfo->nConstraint * 6 + 1);
+  idxStr = (char*)sqlite3_malloc(pInfo->nConstraint * 8 + 1);
   if( idxStr==0 ) return SQLITE_NOMEM;
   pInfo->idxStr = idxStr;
   pInfo->needToFreeIdxStr = 1;
@@ -578,25 +599,29 @@ static int fts5BestIndexMethod(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo){
           if( bSeenRank ) continue;
           idxStr[iIdxStr++] = 'r';
           bSeenRank = 1;
-        }else{
+        }else if( iCol>=0 ){
           bSeenMatch = 1;
-          idxStr[iIdxStr++] = 'm';
-          if( iCol<nCol ){
-            sqlite3_snprintf(6, &idxStr[iIdxStr], "%d", iCol);
-            idxStr += strlen(&idxStr[iIdxStr]);
-            assert( idxStr[iIdxStr]=='\0' );
-          }
+          idxStr[iIdxStr++] = 'M';
+          sqlite3_snprintf(6, &idxStr[iIdxStr], "%d", iCol);
+          idxStr += strlen(&idxStr[iIdxStr]);
+          assert( idxStr[iIdxStr]=='\0' );
         }
         pInfo->aConstraintUsage[i].argvIndex = ++iCons;
         pInfo->aConstraintUsage[i].omit = 1;
       }
-    }
-    else if( p->usable && bSeenEq==0 
-      && p->op==SQLITE_INDEX_CONSTRAINT_EQ && iCol<0 
-    ){
-      idxStr[iIdxStr++] = '=';
-      bSeenEq = 1;
-      pInfo->aConstraintUsage[i].argvIndex = ++iCons;
+    }else if( p->usable ){
+      if( iCol>=0 && iCol<nCol && fts5UsePatternMatch(pConfig, p) ){
+        assert( p->op==FTS5_PATTERN_LIKE || p->op==FTS5_PATTERN_GLOB );
+        idxStr[iIdxStr++] = p->op==FTS5_PATTERN_LIKE ? 'L' : 'G';
+        sqlite3_snprintf(6, &idxStr[iIdxStr], "%d", iCol);
+        idxStr += strlen(&idxStr[iIdxStr]);
+        pInfo->aConstraintUsage[i].argvIndex = ++iCons;
+        assert( idxStr[iIdxStr]=='\0' );
+      }else if( bSeenEq==0 && p->op==SQLITE_INDEX_CONSTRAINT_EQ && iCol<0 ){
+        idxStr[iIdxStr++] = '=';
+        bSeenEq = 1;
+        pInfo->aConstraintUsage[i].argvIndex = ++iCons;
+      }
     }
   }
 
@@ -1229,19 +1254,14 @@ static int fts5FilterMethod(
       case 'r':
         pRank = apVal[i];
         break;
-      case 'm': {
+      case 'M': {
         const char *zText = (const char*)sqlite3_value_text(apVal[i]);
         if( zText==0 ) zText = "";
-
-        if( idxStr[iIdxStr]>='0' && idxStr[iIdxStr]<='9' ){
-          iCol = 0;
-          do{
-            iCol = iCol*10 + (idxStr[iIdxStr]-'0');
-            iIdxStr++;
-          }while( idxStr[iIdxStr]>='0' && idxStr[iIdxStr]<='9' );
-        }else{
-          iCol = pConfig->nCol;
-        }
+        iCol = 0;
+        do{
+          iCol = iCol*10 + (idxStr[iIdxStr]-'0');
+          iIdxStr++;
+        }while( idxStr[iIdxStr]>='0' && idxStr[iIdxStr]<='9' );
 
         if( zText[0]=='*' ){
           /* The user has issued a query of the form "MATCH '*...'". This
@@ -1251,7 +1271,7 @@ static int fts5FilterMethod(
           goto filter_out;
         }else{
           char **pzErr = &pTab->p.base.zErrMsg;
-          rc = sqlite3Fts5ExprNew(pConfig, iCol, zText, &pExpr, pzErr);
+          rc = sqlite3Fts5ExprNew(pConfig, 0, iCol, zText, &pExpr, pzErr);
           if( rc==SQLITE_OK ){
             rc = sqlite3Fts5ExprAnd(&pCsr->pExpr, pExpr);
             pExpr = 0;
@@ -1259,6 +1279,25 @@ static int fts5FilterMethod(
           if( rc!=SQLITE_OK ) goto filter_out;
         }
 
+        break;
+      }
+      case 'L':
+      case 'G': {
+        int bGlob = (idxStr[iIdxStr-1]=='G');
+        const char *zText = (const char*)sqlite3_value_text(apVal[i]);
+        iCol = 0;
+        do{
+          iCol = iCol*10 + (idxStr[iIdxStr]-'0');
+          iIdxStr++;
+        }while( idxStr[iIdxStr]>='0' && idxStr[iIdxStr]<='9' );
+        if( zText ){
+          rc = sqlite3Fts5ExprPattern(pConfig, bGlob, iCol, zText, &pExpr);
+        }
+        if( rc==SQLITE_OK ){
+          rc = sqlite3Fts5ExprAnd(&pCsr->pExpr, pExpr);
+          pExpr = 0;
+        }
+        if( rc!=SQLITE_OK ) goto filter_out;
         break;
       }
       case '=':
@@ -1335,7 +1374,8 @@ static int fts5FilterMethod(
         pTab->pStorage, fts5StmtType(pCsr), &pCsr->pStmt, &pTab->p.base.zErrMsg
     );
     if( rc==SQLITE_OK ){
-      if( pCsr->ePlan==FTS5_PLAN_ROWID ){
+      if( pRowidEq!=0 ){
+        assert( pCsr->ePlan==FTS5_PLAN_ROWID );
         sqlite3_bind_value(pCsr->pStmt, 1, pRowidEq);
       }else{
         sqlite3_bind_int64(pCsr->pStmt, 1, pCsr->iFirstRowid);
@@ -1508,7 +1548,8 @@ static int fts5SpecialInsert(
     int nMerge = sqlite3_value_int(pVal);
     rc = sqlite3Fts5StorageMerge(pTab->pStorage, nMerge);
   }else if( 0==sqlite3_stricmp("integrity-check", zCmd) ){
-    rc = sqlite3Fts5StorageIntegrity(pTab->pStorage);
+    int iArg = sqlite3_value_int(pVal);
+    rc = sqlite3Fts5StorageIntegrity(pTab->pStorage, iArg);
 #ifdef SQLITE_DEBUG
   }else if( 0==sqlite3_stricmp("prefix-index", zCmd) ){
     pConfig->bPrefixIndex = sqlite3_value_int(pVal);
@@ -1909,13 +1950,15 @@ static int fts5CacheInstArray(Fts5Cursor *pCsr){
 
         nInst++;
         if( nInst>=pCsr->nInstAlloc ){
-          pCsr->nInstAlloc = pCsr->nInstAlloc ? pCsr->nInstAlloc*2 : 32;
+          int nNewSize = pCsr->nInstAlloc ? pCsr->nInstAlloc*2 : 32;
           aInst = (int*)sqlite3_realloc64(
-              pCsr->aInst, pCsr->nInstAlloc*sizeof(int)*3
+              pCsr->aInst, nNewSize*sizeof(int)*3
               );
           if( aInst ){
             pCsr->aInst = aInst;
+            pCsr->nInstAlloc = nNewSize;
           }else{
+            nInst--;
             rc = SQLITE_NOMEM;
             break;
           }
@@ -2139,7 +2182,8 @@ static int fts5ApiPhraseFirst(
   int n;
   int rc = fts5CsrPoslist(pCsr, iPhrase, &pIter->a, &n);
   if( rc==SQLITE_OK ){
-    pIter->b = &pIter->a[n];
+    assert( pIter->a || n==0 );
+    pIter->b = (pIter->a ? &pIter->a[n] : 0);
     *piCol = 0;
     *piOff = 0;
     fts5ApiPhraseNext(pCtx, pIter, piCol, piOff);
@@ -2198,7 +2242,8 @@ static int fts5ApiPhraseFirstColumn(
       rc = sqlite3Fts5ExprPhraseCollist(pCsr->pExpr, iPhrase, &pIter->a, &n);
     }
     if( rc==SQLITE_OK ){
-      pIter->b = &pIter->a[n];
+      assert( pIter->a || n==0 );
+      pIter->b = (pIter->a ? &pIter->a[n] : 0);
       *piCol = 0;
       fts5ApiPhraseNextColumn(pCtx, pIter, piCol);
     }
@@ -2206,7 +2251,8 @@ static int fts5ApiPhraseFirstColumn(
     int n;
     rc = fts5CsrPoslist(pCsr, iPhrase, &pIter->a, &n);
     if( rc==SQLITE_OK ){
-      pIter->b = &pIter->a[n];
+      assert( pIter->a || n==0 );
+      pIter->b = (pIter->a ? &pIter->a[n] : 0);
       if( n<=0 ){
         *piCol = -1;
       }else if( pIter->a[0]==0x01 ){
@@ -2671,8 +2717,7 @@ int sqlite3Fts5GetTokenizer(
   Fts5Global *pGlobal, 
   const char **azArg,
   int nArg,
-  Fts5Tokenizer **ppTok,
-  fts5_tokenizer **ppTokApi,
+  Fts5Config *pConfig,
   char **pzErr
 ){
   Fts5TokenizerModule *pMod;
@@ -2684,16 +2729,22 @@ int sqlite3Fts5GetTokenizer(
     rc = SQLITE_ERROR;
     *pzErr = sqlite3_mprintf("no such tokenizer: %s", azArg[0]);
   }else{
-    rc = pMod->x.xCreate(pMod->pUserData, &azArg[1], (nArg?nArg-1:0), ppTok);
-    *ppTokApi = &pMod->x;
-    if( rc!=SQLITE_OK && pzErr ){
-      *pzErr = sqlite3_mprintf("error in tokenizer constructor");
+    rc = pMod->x.xCreate(
+        pMod->pUserData, (azArg?&azArg[1]:0), (nArg?nArg-1:0), &pConfig->pTok
+    );
+    pConfig->pTokApi = &pMod->x;
+    if( rc!=SQLITE_OK ){
+      if( pzErr ) *pzErr = sqlite3_mprintf("error in tokenizer constructor");
+    }else{
+      pConfig->ePattern = sqlite3Fts5TokenizerPattern(
+          pMod->x.xCreate, pConfig->pTok
+      );
     }
   }
 
   if( rc!=SQLITE_OK ){
-    *ppTokApi = 0;
-    *ppTok = 0;
+    pConfig->pTokApi = 0;
+    pConfig->pTok = 0;
   }
 
   return rc;

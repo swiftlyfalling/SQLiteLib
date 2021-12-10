@@ -461,6 +461,7 @@ static PgHdr1 *pcache1AllocPage(PCache1 *pCache, int benignMalloc){
     p->page.pExtra = &p[1];
     p->isBulkLocal = 0;
     p->isAnchor = 0;
+    p->pLruPrev = 0;           /* Initializing this saves a valgrind error */
   }
   (*pCache->pnPurgeable)++;
   return p;
@@ -816,12 +817,18 @@ static sqlite3_pcache *pcache1Create(int szPage, int szExtra, int bPurgeable){
 */
 static void pcache1Cachesize(sqlite3_pcache *p, int nMax){
   PCache1 *pCache = (PCache1 *)p;
+  u32 n;
+  assert( nMax>=0 );
   if( pCache->bPurgeable ){
     PGroup *pGroup = pCache->pGroup;
     pcache1EnterMutex(pGroup);
-    pGroup->nMaxPage += (nMax - pCache->nMax);
+    n = (u32)nMax;
+    if( n > 0x7fff0000 - pGroup->nMaxPage + pCache->nMax ){
+      n = 0x7fff0000 - pGroup->nMaxPage + pCache->nMax;
+    }
+    pGroup->nMaxPage += (n - pCache->nMax);
     pGroup->mxPinned = pGroup->nMaxPage + 10 - pGroup->nMinPage;
-    pCache->nMax = nMax;
+    pCache->nMax = n;
     pCache->n90pct = pCache->nMax*9/10;
     pcache1EnforceMaxPage(pCache);
     pcache1LeaveMutex(pGroup);
@@ -837,7 +844,7 @@ static void pcache1Shrink(sqlite3_pcache *p){
   PCache1 *pCache = (PCache1*)p;
   if( pCache->bPurgeable ){
     PGroup *pGroup = pCache->pGroup;
-    int savedMaxPage;
+    unsigned int savedMaxPage;
     pcache1EnterMutex(pGroup);
     savedMaxPage = pGroup->nMaxPage;
     pGroup->nMaxPage = 0;

@@ -151,8 +151,8 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   Btree *pTemp;           /* The temporary database we vacuum into */
   u32 saved_mDbFlags;     /* Saved value of db->mDbFlags */
   u64 saved_flags;        /* Saved value of db->flags */
-  int saved_nChange;      /* Saved value of db->nChange */
-  int saved_nTotalChange; /* Saved value of db->nTotalChange */
+  i64 saved_nChange;      /* Saved value of db->nChange */
+  i64 saved_nTotalChange; /* Saved value of db->nTotalChange */
   u32 saved_openFlags;    /* Saved value of db->openFlags */
   u8 saved_mTrace;        /* Saved trace settings */
   Db *pDb = 0;            /* Database to detach at end of vacuum */
@@ -250,7 +250,9 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
 
   /* Do not attempt to change the page size for a WAL database */
   if( sqlite3PagerGetJournalMode(sqlite3BtreePager(pMain))
-                                               ==PAGER_JOURNALMODE_WAL ){
+                                               ==PAGER_JOURNALMODE_WAL
+   && pOut==0
+  ){
     db->nextPagesize = 0;
   }
 
@@ -339,8 +341,8 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
        BTREE_APPLICATION_ID,     0,  /* Preserve the application id */
     };
 
-    assert( 1==sqlite3BtreeIsInTrans(pTemp) );
-    assert( pOut!=0 || 1==sqlite3BtreeIsInTrans(pMain) );
+    assert( SQLITE_TXN_WRITE==sqlite3BtreeTxnState(pTemp) );
+    assert( pOut!=0 || SQLITE_TXN_WRITE==sqlite3BtreeTxnState(pMain) );
 
     /* Copy Btree meta values */
     for(i=0; i<ArraySize(aCopy); i+=2){

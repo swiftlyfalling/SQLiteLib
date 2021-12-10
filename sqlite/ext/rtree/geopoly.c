@@ -305,11 +305,16 @@ static GeoPoly *geopolyFuncParam(
 ){
   GeoPoly *p = 0;
   int nByte;
+  testcase( pCtx==0 );
   if( sqlite3_value_type(pVal)==SQLITE_BLOB
    && (nByte = sqlite3_value_bytes(pVal))>=(4+6*sizeof(GeoCoord))
   ){
     const unsigned char *a = sqlite3_value_blob(pVal);
     int nVertex;
+    if( a==0 ){
+      if( pCtx ) sqlite3_result_error_nomem(pCtx);
+      return 0;
+    }
     nVertex = (a[1]<<16) + (a[2]<<8) + a[3];
     if( (a[0]==0 || a[0]==1)
      && (nVertex*2*sizeof(GeoCoord) + 4)==(unsigned int)nByte
@@ -683,7 +688,7 @@ static GeoPoly *geopolyBBox(
       aCoord[2].f = mnY;
       aCoord[3].f = mxY;
     }
-  }else{
+  }else if( aCoord ){
     memset(aCoord, 0, sizeof(RtreeCoord)*4);
   }
   return pOut;
@@ -1075,7 +1080,7 @@ static int geopolyOverlap(GeoPoly *p1, GeoPoly *p2){
   geopolyAddSegments(p, p1, 1);
   geopolyAddSegments(p, p2, 2);
   pThisEvent = geopolySortEventsByX(p->aEvent, p->nEvent);
-  rX = pThisEvent->x==0.0 ? -1.0 : 0.0;
+  rX = pThisEvent && pThisEvent->x==0.0 ? -1.0 : 0.0;
   memset(aOverlap, 0, sizeof(aOverlap));
   while( pThisEvent ){
     if( pThisEvent->x!=rX ){
@@ -1134,11 +1139,11 @@ static int geopolyOverlap(GeoPoly *p1, GeoPoly *p2){
     }else{
       /* Remove a segment */
       if( pActive==pThisEvent->pSeg ){
-        pActive = pActive->pNext;
+        pActive = ALWAYS(pActive) ? pActive->pNext : 0;
       }else{
         for(pSeg=pActive; pSeg; pSeg=pSeg->pNext){
           if( pSeg->pNext==pThisEvent->pSeg ){
-            pSeg->pNext = pSeg->pNext->pNext;
+            pSeg->pNext = ALWAYS(pSeg->pNext) ? pSeg->pNext->pNext : 0;
             break;
           }
         }
@@ -1382,6 +1387,7 @@ static int geopolyFilter(
       RtreeCoord bbox[4];
       RtreeConstraint *p;
       assert( argc==1 );
+      assert( argv[0]!=0 );
       geopolyBBox(0, argv[0], bbox, &rc);
       if( rc ){
         goto geopoly_filter_end;
@@ -1609,6 +1615,7 @@ static int geopolyUpdate(
         || !sqlite3_value_nochange(aData[2])  /* UPDATE _shape */
         || oldRowid!=newRowid)                /* Rowid change */
   ){
+    assert( aData[2]!=0 );
     geopolyBBox(0, aData[2], cell.aCoord, &rc);
     if( rc ){
       if( rc==SQLITE_ERROR ){
