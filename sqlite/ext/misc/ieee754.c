@@ -167,6 +167,14 @@ static void ieee754func(
     int isNeg = 0;
     m = sqlite3_value_int64(argv[0]);
     e = sqlite3_value_int64(argv[1]);
+
+    /* Limit the range of e.  Ticket 22dea1cfdb9151e4 2021-03-02 */
+    if( e>10000 ){
+      e = 10000;
+    }else if( e<-10000 ){
+      e = -10000;
+    }
+
     if( m<0 ){
       isNeg = 1;
       m = -m;
@@ -186,7 +194,11 @@ static void ieee754func(
     e += 1075;
     if( e<=0 ){
       /* Subnormal */
-      m >>= 1-e;
+      if( 1-e >= 64 ){
+        m = 0;
+      }else{
+        m >>= 1-e;
+      }
       e = 0;
     }else if( e>0x7ff ){
       e = 0x7ff;

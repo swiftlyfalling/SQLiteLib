@@ -84,11 +84,9 @@ char *sqlite3VdbeExpandSql(
 #ifndef SQLITE_OMIT_UTF16
   Mem utf8;                /* Used to convert UTF16 into UTF8 for display */
 #endif
-  char zBase[100];         /* Initial working space */
 
   db = p->db;
-  sqlite3StrAccumInit(&out, 0, zBase, sizeof(zBase), 
-                      db->aLimit[SQLITE_LIMIT_LENGTH]);
+  sqlite3StrAccumInit(&out, 0, 0, 0, db->aLimit[SQLITE_LIMIT_LENGTH]);
   if( db->nVdbeExec>1 ){
     while( *zRawSql ){
       const char *zStart = zRawSql;
@@ -125,7 +123,7 @@ char *sqlite3VdbeExpandSql(
         assert( idx>0 );
       }
       zRawSql += nToken;
-      nextIndex = idx + 1;
+      nextIndex = MAX(idx + 1, nextIndex);
       assert( idx>0 && idx<=p->nVar );
       pVar = &p->aVar[idx-1];
       if( pVar->flags & MEM_Null ){

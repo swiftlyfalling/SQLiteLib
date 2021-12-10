@@ -1335,8 +1335,18 @@ static int fts3SegReaderNext(
         char *aCopy;
         PendingList *pList = (PendingList *)fts3HashData(pElem);
         int nCopy = pList->nData+1;
-        pReader->zTerm = (char *)fts3HashKey(pElem);
-        pReader->nTerm = fts3HashKeysize(pElem);
+
+        int nTerm = fts3HashKeysize(pElem);
+        if( (nTerm+1)>pReader->nTermAlloc ){
+          sqlite3_free(pReader->zTerm);
+          pReader->zTerm = (char*)sqlite3_malloc((nTerm+1)*2);
+          if( !pReader->zTerm ) return SQLITE_NOMEM;
+          pReader->nTermAlloc = (nTerm+1)*2;
+        }
+        memcpy(pReader->zTerm, fts3HashKey(pElem), nTerm);
+        pReader->zTerm[nTerm] = '\0';
+        pReader->nTerm = nTerm;
+
         aCopy = (char*)sqlite3_malloc(nCopy);
         if( !aCopy ) return SQLITE_NOMEM;
         memcpy(aCopy, pList->aData, nCopy);
@@ -1589,9 +1599,7 @@ int sqlite3Fts3MsrOvfl(
 */
 void sqlite3Fts3SegReaderFree(Fts3SegReader *pReader){
   if( pReader ){
-    if( !fts3SegReaderIsPending(pReader) ){
-      sqlite3_free(pReader->zTerm);
-    }
+    sqlite3_free(pReader->zTerm);
     if( !fts3SegReaderIsRootOnly(pReader) ){
       sqlite3_free(pReader->aNode);
     }
@@ -1807,7 +1815,7 @@ static int fts3SegReaderCmp(Fts3SegReader *pLhs, Fts3SegReader *pRhs){
   if( rc==0 ){
     rc = pRhs->iIdx - pLhs->iIdx;
   }
-  assert( rc!=0 );
+  assert_fts3_nc( rc!=0 );
   return rc;
 }
 
@@ -2003,8 +2011,8 @@ static int fts3PrefixCompress(
   int nNext                       /* Size of buffer zNext in bytes */
 ){
   int n;
-  UNUSED_PARAMETER(nNext);
-  for(n=0; n<nPrev && zPrev[n]==zNext[n]; n++);
+  for(n=0; n<nPrev && n<nNext && zPrev[n]==zNext[n]; n++);
+  assert_fts3_nc( n<nNext );
   return n;
 }
 
@@ -3003,7 +3011,7 @@ int sqlite3Fts3SegReaderStep(
 
           nByte = sqlite3Fts3VarintLen(iDelta) + (isRequirePos?nList+1:0);
 
-          rc = fts3GrowSegReaderBuffer(pCsr, nByte+nDoclist);
+          rc = fts3GrowSegReaderBuffer(pCsr, nByte+nDoclist+FTS3_NODE_PADDING);
           if( rc ) return rc;
 
           if( isFirst ){
@@ -3783,7 +3791,7 @@ static int nodeReaderNext(NodeReader *p){
       return FTS_CORRUPT_VTAB;
     }
     blobGrowBuffer(&p->term, nPrefix+nSuffix, &rc);
-    if( rc==SQLITE_OK ){
+    if( rc==SQLITE_OK && ALWAYS(p->term.a!=0) ){
       memcpy(&p->term.a[nPrefix], &p->aNode[p->iOff], nSuffix);
       p->term.n = nPrefix+nSuffix;
       p->iOff += nSuffix;
@@ -4177,7 +4185,11 @@ static int fts3TermCmp(
   int nCmp = MIN(nLhs, nRhs);
   int res;
 
-  res = (nCmp ? memcmp(zLhs, zRhs, nCmp) : 0);
+  if( nCmp && ALWAYS(zLhs) && ALWAYS(zRhs) ){
+    res = memcmp(zLhs, zRhs, nCmp);
+  }else{
+    res = 0;
+  }
   if( res==0 ) res = nLhs - nRhs;
 
   return res;
@@ -4335,17 +4347,20 @@ static int fts3IncrmergeLoad(
           while( reader.aNode && rc==SQLITE_OK ) rc = nodeReaderNext(&reader);
           blobGrowBuffer(&pNode->key, reader.term.n, &rc);
           if( rc==SQLITE_OK ){
-            memcpy(pNode->key.a, reader.term.a, reader.term.n);
+            assert_fts3_nc( reader.term.n>0 || reader.aNode==0 );
+            if( reader.term.n>0 ){
+              memcpy(pNode->key.a, reader.term.a, reader.term.n);
+            }
             pNode->key.n = reader.term.n;
             if( i>0 ){
               char *aBlock = 0;
               int nBlock = 0;
               pNode = &pWriter->aNodeWriter[i-1];
               pNode->iBlock = reader.iChild;
-              rc = sqlite3Fts3ReadBlock(p, reader.iChild, &aBlock, &nBlock, 0);
+              rc = sqlite3Fts3ReadBlock(p, reader.iChild, &aBlock, &nBlock,0);
               blobGrowBuffer(&pNode->block, 
                   MAX(nBlock, p->nNodeSize)+FTS3_NODE_PADDING, &rc
-              );
+                  );
               if( rc==SQLITE_OK ){
                 memcpy(pNode->block.a, aBlock, nBlock);
                 pNode->block.n = nBlock;
@@ -4818,7 +4833,7 @@ static int fts3IncrmergeHintLoad(Fts3Table *p, Blob *pHint){
       if( aHint ){
         blobGrowBuffer(pHint, nHint, &rc);
         if( rc==SQLITE_OK ){
-          memcpy(pHint->a, aHint, nHint);
+          if( ALWAYS(pHint->a!=0) ) memcpy(pHint->a, aHint, nHint);
           pHint->n = nHint;
         }
       }

@@ -306,7 +306,6 @@ int sqlite3Fts5HashWrite(
       p->iCol = (pHash->eDetail==FTS5_DETAIL_FULL ? 0 : -1);
     }
 
-    nIncr += p->nData;
   }else{
 
     /* Appending to an existing hash-entry. Check that there is enough 
@@ -339,8 +338,9 @@ int sqlite3Fts5HashWrite(
   /* If this is a new rowid, append the 4-byte size field for the previous
   ** entry, and the new rowid for this entry.  */
   if( iRowid!=p->iRowid ){
+    u64 iDiff = (u64)iRowid - (u64)p->iRowid;
     fts5HashAddPoslistSize(pHash, p, 0);
-    p->nData += sqlite3Fts5PutVarint(&pPtr[p->nData], iRowid - p->iRowid);
+    p->nData += sqlite3Fts5PutVarint(&pPtr[p->nData], iDiff);
     p->iRowid = iRowid;
     bNew = 1;
     p->iSzPoslist = p->nData;
@@ -356,7 +356,7 @@ int sqlite3Fts5HashWrite(
       p->bContent = 1;
     }else{
       /* Append a new column value, if necessary */
-      assert( iCol>=p->iCol );
+      assert_nc( iCol>=p->iCol );
       if( iCol!=p->iCol ){
         if( pHash->eDetail==FTS5_DETAIL_FULL ){
           pPtr[p->nData++] = 0x01;

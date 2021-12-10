@@ -970,13 +970,16 @@ int sqlite3VdbeSorterInit(
   if( pSorter==0 ){
     rc = SQLITE_NOMEM_BKPT;
   }else{
+    Btree *pBt = db->aDb[0].pBt;
     pSorter->pKeyInfo = pKeyInfo = (KeyInfo*)((u8*)pSorter + sz);
     memcpy(pKeyInfo, pCsr->pKeyInfo, szKeyInfo);
     pKeyInfo->db = 0;
     if( nField && nWorker==0 ){
       pKeyInfo->nKeyField = nField;
     }
-    pSorter->pgsz = pgsz = sqlite3BtreeGetPageSize(db->aDb[0].pBt);
+    sqlite3BtreeEnter(pBt);
+    pSorter->pgsz = pgsz = sqlite3BtreeGetPageSize(pBt);
+    sqlite3BtreeLeave(pBt);
     pSorter->nTask = nWorker + 1;
     pSorter->iPrev = (u8)(nWorker - 1);
     pSorter->bUseThreads = (pSorter->nTask>1);
@@ -1070,8 +1073,9 @@ static void vdbeSorterWorkDebug(SortSubtask *pTask, const char *zEvent){
   fprintf(stderr, "%lld:%d %s\n", t, iTask, zEvent);
 }
 static void vdbeSorterRewindDebug(const char *zEvent){
-  i64 t;
-  sqlite3OsCurrentTimeInt64(sqlite3_vfs_find(0), &t);
+  i64 t = 0;
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  if( ALWAYS(pVfs) ) sqlite3OsCurrentTimeInt64(pVfs, &t);
   fprintf(stderr, "%lld:X %s\n", t, zEvent);
 }
 static void vdbeSorterPopulateDebug(
@@ -1285,7 +1289,7 @@ static void vdbeSorterExtendFile(sqlite3 *db, sqlite3_file *pFd, i64 nByte){
     sqlite3OsFileControlHint(pFd, SQLITE_FCNTL_CHUNK_SIZE, &chunksize);
     sqlite3OsFileControlHint(pFd, SQLITE_FCNTL_SIZE_HINT, &nByte);
     sqlite3OsFetch(pFd, 0, (int)nByte, &p);
-    sqlite3OsUnfetch(pFd, 0, p);
+    if( p ) sqlite3OsUnfetch(pFd, 0, p);
   }
 }
 #else
@@ -2003,6 +2007,7 @@ static int vdbeIncrMergerNew(
     vdbeMergeEngineFree(pMerger);
     rc = SQLITE_NOMEM_BKPT;
   }
+  assert( *ppOut!=0 || rc!=SQLITE_OK );
   return rc;
 }
 

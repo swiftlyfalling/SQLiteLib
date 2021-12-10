@@ -401,7 +401,7 @@ struct lemon {
   struct symbol *errsym;   /* The error symbol */
   struct symbol *wildcard; /* Token that matches anything */
   char *name;              /* Name of the generated parser */
-  char *arg;               /* Declaration of the 3th argument to parser */
+  char *arg;               /* Declaration of the 3rd argument to parser */
   char *ctx;               /* Declaration of 2nd argument to constructor */
   char *tokentype;         /* Type of terminal symbols in the parser stack */
   char *vartype;           /* The default type of non-terminal symbols */
@@ -917,8 +917,11 @@ void FindStates(struct lemon *lemp)
       lemp->errorcnt++;
       sp = lemp->startRule->lhs;
     }
-  }else{
+  }else if( lemp->startRule ){
     sp = lemp->startRule->lhs;
+  }else{
+    ErrorMsg(lemp->filename,0,"Internal error - no start rule\n");
+    exit(1);
   }
 
   /* Make sure the start symbol doesn't occur on the right-hand side of
@@ -1027,7 +1030,7 @@ PRIVATE void buildshifts(struct lemon *lemp, struct state *stp)
   struct symbol *bsp;  /* Symbol following the dot in configuration "bcfp" */
   struct state *newstp; /* A pointer to a successor state */
 
-  /* Each configuration becomes complete after it contibutes to a successor
+  /* Each configuration becomes complete after it contributes to a successor
   ** state.  Initially, all configurations are incomplete */
   for(cfp=stp->cfp; cfp; cfp=cfp->next) cfp->status = INCOMPLETE;
 
@@ -1083,7 +1086,7 @@ void FindLinks(struct lemon *lemp)
   ** which the link is attached. */
   for(i=0; i<lemp->nstate; i++){
     stp = lemp->sorted[i];
-    for(cfp=stp->cfp; cfp; cfp=cfp->next){
+    for(cfp=stp?stp->cfp:0; cfp; cfp=cfp->next){
       cfp->stp = stp;
     }
   }
@@ -1092,7 +1095,7 @@ void FindLinks(struct lemon *lemp)
   ** links are used in the follow-set computation. */
   for(i=0; i<lemp->nstate; i++){
     stp = lemp->sorted[i];
-    for(cfp=stp->cfp; cfp; cfp=cfp->next){
+    for(cfp=stp?stp->cfp:0; cfp; cfp=cfp->next){
       for(plp=cfp->bplp; plp; plp=plp->next){
         other = plp->cfp;
         Plink_add(&other->fplp,cfp);
@@ -1115,6 +1118,7 @@ void FindFollowSets(struct lemon *lemp)
   int change;
 
   for(i=0; i<lemp->nstate; i++){
+    assert( lemp->sorted[i]!=0 );
     for(cfp=lemp->sorted[i]->cfp; cfp; cfp=cfp->next){
       cfp->status = INCOMPLETE;
     }
@@ -1123,6 +1127,7 @@ void FindFollowSets(struct lemon *lemp)
   do{
     progress = 0;
     for(i=0; i<lemp->nstate; i++){
+      assert( lemp->sorted[i]!=0 );
       for(cfp=lemp->sorted[i]->cfp; cfp; cfp=cfp->next){
         if( cfp->status==COMPLETE ) continue;
         for(plp=cfp->fplp; plp; plp=plp->next){
@@ -1172,7 +1177,14 @@ void FindActions(struct lemon *lemp)
   /* Add the accepting token */
   if( lemp->start ){
     sp = Symbol_find(lemp->start);
-    if( sp==0 ) sp = lemp->startRule->lhs;
+    if( sp==0 ){
+      if( lemp->startRule==0 ){
+        fprintf(stderr, "internal error on source line %d: no start rule\n",
+                __LINE__);
+        exit(1);
+      }
+      sp = lemp->startRule->lhs;
+    }
   }else{
     sp = lemp->startRule->lhs;
   }
@@ -1299,21 +1311,7 @@ static struct config **basisend = 0;     /* End of list of basis configs */
 
 /* Return a pointer to a new configuration */
 PRIVATE struct config *newconfig(void){
-  struct config *newcfg;
-  if( freelist==0 ){
-    int i;
-    int amt = 3;
-    freelist = (struct config *)calloc( amt, sizeof(struct config) );
-    if( freelist==0 ){
-      fprintf(stderr,"Unable to allocate memory for a new configuration.");
-      exit(1);
-    }
-    for(i=0; i<amt-1; i++) freelist[i].next = &freelist[i+1];
-    freelist[amt-1].next = 0;
-  }
-  newcfg = freelist;
-  freelist = freelist->next;
-  return newcfg;
+  return (struct config*)calloc(1, sizeof(struct config));
 }
 
 /* The configuration "old" is no longer used */
@@ -1591,14 +1589,14 @@ static struct rule *Rule_merge(struct rule *pA, struct rule *pB){
 ** Sort a list of rules in order of increasing iRule value
 */
 static struct rule *Rule_sort(struct rule *rp){
-  int i;
+  unsigned int i;
   struct rule *pNext;
   struct rule *x[32];
   memset(x, 0, sizeof(x));
   while( rp ){
     pNext = rp->next;
     rp->next = 0;
-    for(i=0; i<sizeof(x)/sizeof(x[0]) && x[i]; i++){
+    for(i=0; i<sizeof(x)/sizeof(x[0])-1 && x[i]; i++){
       rp = Rule_merge(x[i], rp);
       x[i] = 0;
     }
@@ -1625,8 +1623,7 @@ static void stats_line(const char *zLabel, int iValue){
 }
 
 /* The main program.  Parse the command line and do it... */
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv){
   static int version = 0;
   static int rpflag = 0;
   static int basisflag = 0;
@@ -1669,6 +1666,7 @@ int main(int argc, char **argv)
   struct lemon lem;
   struct rule *rp;
 
+  (void)argc;
   OptInit(argv,options,stderr);
   if( version ){
      printf("Lemon version 1.0\n");
@@ -1887,7 +1885,7 @@ static char *merge(
 **
 ** Return Value:
 **   A pointer to the head of a sorted list containing the elements
-**   orginally in list.
+**   originally in list.
 **
 ** Side effects:
 **   The "next" pointers for elements in list are changed.
@@ -1932,8 +1930,12 @@ static FILE *errstream;
 static void errline(int n, int k, FILE *err)
 {
   int spcnt, i;
-  if( g_argv[0] ) fprintf(err,"%s",g_argv[0]);
-  spcnt = lemonStrlen(g_argv[0]) + 1;
+  if( g_argv[0] ){
+    fprintf(err,"%s",g_argv[0]);
+    spcnt = lemonStrlen(g_argv[0]) + 1;
+  }else{
+    spcnt = 0;
+  }
   for(i=1; i<n && g_argv[i]; i++){
     fprintf(err," %s",g_argv[i]);
     spcnt += lemonStrlen(g_argv[i])+1;
@@ -2266,7 +2268,7 @@ static void parseonetoken(struct pstate *psp)
       psp->preccounter = 0;
       psp->firstrule = psp->lastrule = 0;
       psp->gp->nrule = 0;
-      /* Fall thru to next case */
+      /* fall through */
     case WAITING_FOR_DECL_OR_RULE:
       if( x[0]=='%' ){
         psp->state = WAITING_FOR_DECL_KEYWORD;
@@ -2426,7 +2428,7 @@ static void parseonetoken(struct pstate *psp)
           psp->alias[psp->nrhs] = 0;
           psp->nrhs++;
         }
-      }else if( (x[0]=='|' || x[0]=='/') && psp->nrhs>0 ){
+      }else if( (x[0]=='|' || x[0]=='/') && psp->nrhs>0 && ISUPPER(x[1]) ){
         struct symbol *msp = psp->rhs[psp->nrhs-1];
         if( msp->type!=MULTITERMINAL ){
           struct symbol *origsp = msp;
@@ -2638,8 +2640,10 @@ static void parseonetoken(struct pstate *psp)
         }
         nOld = lemonStrlen(zOld);
         n = nOld + nNew + 20;
-        addLineMacro = !psp->gp->nolinenosflag && psp->insertLineMacro &&
-                        (psp->decllinenoslot==0 || psp->decllinenoslot[0]!=0);
+        addLineMacro = !psp->gp->nolinenosflag
+                       && psp->insertLineMacro
+                       && psp->tokenlineno>1
+                       && (psp->decllinenoslot==0 || psp->decllinenoslot[0]!=0);
         if( addLineMacro ){
           for(z=psp->filename, nBack=0; *z; z++){
             if( *z=='\\' ) nBack++;
@@ -2706,7 +2710,7 @@ static void parseonetoken(struct pstate *psp)
       ** in order to control their assigned integer number.  The number for
       ** each token is assigned when it is first seen.  So by including
       **
-      **     %token ONE TWO THREE
+      **     %token ONE TWO THREE.
       **
       ** early in the grammar file, that assigns small consecutive values
       ** to each of the tokens ONE TWO and THREE.
@@ -3511,12 +3515,12 @@ void ReportOutput(struct lemon *lemp)
 }
 
 /* Search for the file "name" which is in the same directory as
-** the exacutable */
+** the executable */
 PRIVATE char *pathsearch(char *argv0, char *name, int modemask)
 {
   const char *pathlist;
-  char *pathbufptr;
-  char *pathbuf;
+  char *pathbufptr = 0;
+  char *pathbuf = 0;
   char *path,*cp;
   char c;
 
@@ -3550,8 +3554,8 @@ PRIVATE char *pathsearch(char *argv0, char *name, int modemask)
         else pathbuf = &cp[1];
         if( access(path,modemask)==0 ) break;
       }
-      free(pathbufptr);
     }
+    free(pathbufptr);
   }
   return path;
 }
@@ -3569,7 +3573,9 @@ PRIVATE int compute_action(struct lemon *lemp, struct action *ap)
       /* Since a SHIFT is inherient after a prior REDUCE, convert any
       ** SHIFTREDUCE action with a nonterminal on the LHS into a simple
       ** REDUCE action: */
-      if( ap->sp->index>=lemp->nterminal ){
+      if( ap->sp->index>=lemp->nterminal
+       && (lemp->errsym==0 || ap->sp->index!=lemp->errsym->index)
+      ){
         act = lemp->minReduce + ap->x.rp->iRule;
       }else{
         act = lemp->minShiftReduce + ap->x.rp->iRule;
@@ -3617,6 +3623,16 @@ PRIVATE void tplt_xfer(char *name, FILE *in, FILE *out, int *lineno)
   }
 }
 
+/* Skip forward past the header of the template file to the first "%%"
+*/
+PRIVATE void tplt_skip_header(FILE *in, int *lineno)
+{
+  char line[LINESIZE];
+  while( fgets(line,LINESIZE,in) && (line[0]!='%' || line[1]!='%') ){
+    (*lineno)++;
+  }
+}
+
 /* The next function finds the template file and opens it, returning
 ** a pointer to the opened file. */
 PRIVATE FILE *tplt_open(struct lemon *lemp)
@@ -3625,6 +3641,7 @@ PRIVATE FILE *tplt_open(struct lemon *lemp)
   char buf[1000];
   FILE *in;
   char *tpltname;
+  char *toFree = 0;
   char *cp;
 
   /* first, see if user specified a template filename on the command line. */
@@ -3656,7 +3673,7 @@ PRIVATE FILE *tplt_open(struct lemon *lemp)
   }else if( access(templatename,004)==0 ){
     tpltname = templatename;
   }else{
-    tpltname = pathsearch(lemp->argv0,templatename,0);
+    toFree = tpltname = pathsearch(lemp->argv0,templatename,0);
   }
   if( tpltname==0 ){
     fprintf(stderr,"Can't find the parser driver template file \"%s\".\n",
@@ -3666,10 +3683,10 @@ PRIVATE FILE *tplt_open(struct lemon *lemp)
   }
   in = fopen(tpltname,"rb");
   if( in==0 ){
-    fprintf(stderr,"Can't open the template file \"%s\".\n",templatename);
+    fprintf(stderr,"Can't open the template file \"%s\".\n",tpltname);
     lemp->errorcnt++;
-    return 0;
   }
+  free(toFree);
   return in;
 }
 
@@ -3855,7 +3872,7 @@ PRIVATE int translate_code(struct lemon *lemp, struct rule *rp){
     lhsdirect = 1;
   }else if( rp->rhsalias[0]==0 ){
     /* The left-most RHS symbol has no value.  LHS direct is ok.  But
-    ** we have to call the distructor on the RHS symbol first. */
+    ** we have to call the destructor on the RHS symbol first. */
     lhsdirect = 1;
     if( has_destructor(rp->rhs[0],lemp) ){
       append_str(0,0,0,0);
@@ -4077,7 +4094,7 @@ void print_stack_union(
   int *plineno,               /* Pointer to the line number */
   int mhflag                  /* True if generating makeheaders output */
 ){
-  int lineno = *plineno;    /* The line number of the output */
+  int lineno;               /* The line number of the output */
   char **types;             /* A hash table of datatypes */
   int arraysize;            /* Size of the "types" array */
   int maxdtlength;          /* Maximum length of any ".datatype" field. */
@@ -4287,6 +4304,7 @@ void ReportTable(
   int mnTknOfst, mxTknOfst;
   int mnNtOfst, mxNtOfst;
   struct axset *ax;
+  char *prefix;
 
   lemp->minShiftReduce = lemp->nstate;
   lemp->errAction = lemp->minShiftReduce + lemp->nrule;
@@ -4375,7 +4393,26 @@ void ReportTable(
     fprintf(sql, "COMMIT;\n");
   }
   lineno = 1;
-  tplt_xfer(lemp->name,in,out,&lineno);
+
+  fprintf(out, 
+     "/* This file is automatically generated by Lemon from input grammar\n"
+     "** source file \"%s\". */\n", lemp->filename); lineno += 2;
+  
+  /* The first %include directive begins with a C-language comment,
+  ** then skip over the header comment of the template file
+  */
+  if( lemp->include==0 ) lemp->include = "";
+  for(i=0; ISSPACE(lemp->include[i]); i++){
+    if( lemp->include[i]=='\n' ){
+      lemp->include += i+1;
+      i = -1;
+    }
+  }
+  if( lemp->include[0]=='/' ){
+    tplt_skip_header(in,&lineno);
+  }else{
+    tplt_xfer(lemp->name,in,out,&lineno);
+  }
 
   /* Generate the include code, if any */
   tplt_print(out,lemp,lemp->include,&lineno);
@@ -4387,17 +4424,18 @@ void ReportTable(
   tplt_xfer(lemp->name,in,out,&lineno);
 
   /* Generate #defines for all tokens */
+  if( lemp->tokenprefix ) prefix = lemp->tokenprefix;
+  else                    prefix = "";
   if( mhflag ){
-    const char *prefix;
     fprintf(out,"#if INTERFACE\n"); lineno++;
-    if( lemp->tokenprefix ) prefix = lemp->tokenprefix;
-    else                    prefix = "";
-    for(i=1; i<lemp->nterminal; i++){
-      fprintf(out,"#define %s%-30s %2d\n",prefix,lemp->symbols[i]->name,i);
-      lineno++;
-    }
-    fprintf(out,"#endif\n"); lineno++;
+  }else{
+    fprintf(out,"#ifndef %s%s\n", prefix, lemp->symbols[1]->name);
   }
+  for(i=1; i<lemp->nterminal; i++){
+    fprintf(out,"#define %s%-30s %2d\n",prefix,lemp->symbols[i]->name,i);
+    lineno++;
+  }
+  fprintf(out,"#endif\n"); lineno++;
   tplt_xfer(lemp->name,in,out,&lineno);
 
   /* Generate the defines */
@@ -4815,7 +4853,7 @@ void ReportTable(
   ** yyRuleInfoNRhs[].
   **
   ** Note: This code depends on the fact that rules are number
-  ** sequentually beginning with 0.
+  ** sequentially beginning with 0.
   */
   for(i=0, rp=lemp->rule; rp; rp=rp->next, i++){
     fprintf(out,"  %4d,  /* (%d) ", rp->lhs->index, i);
@@ -5303,7 +5341,8 @@ int Strsafe_insert(const char *data)
       newnp->from = &(array.ht[h]);
       array.ht[h] = newnp;
     }
-    free(x1a->tbl);
+    /* free(x1a->tbl); // This program was originally for 16-bit machines.
+    ** Don't worry about freeing memory on modern platforms. */
     *x1a = array;
   }
   /* Insert the new data */
@@ -5471,7 +5510,9 @@ int Symbol_insert(struct symbol *data, const char *key)
       newnp->from = &(array.ht[h]);
       array.ht[h] = newnp;
     }
-    free(x2a->tbl);
+    /* free(x2a->tbl); // This program was originally written for 16-bit
+    ** machines.  Don't worry about freeing this trivial amount of memory
+    ** on modern platforms.  Just leak it. */
     *x2a = array;
   }
   /* Insert the new data */
@@ -5807,7 +5848,9 @@ int Configtable_insert(struct config *data)
       newnp->from = &(array.ht[h]);
       array.ht[h] = newnp;
     }
-    free(x4a->tbl);
+    /* free(x4a->tbl); // This code was originall written for 16-bit machines.
+    ** on modern machines, don't worry about freeing this trival amount of
+    ** memory. */
     *x4a = array;
   }
   /* Insert the new data */
