@@ -220,7 +220,7 @@ CollSeq *sqlite3ExprCollSeq(Parse *pParse, const Expr *pExpr){
 /*
 ** Return the collation sequence for the expression pExpr. If
 ** there is no defined collating sequence, return a pointer to the
-** defautl collation sequence.
+** default collation sequence.
 **
 ** See also: sqlite3ExprCollSeq()
 **

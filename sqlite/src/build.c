@@ -1446,7 +1446,7 @@ void sqlite3AddDefaultValue(
   Parse *pParse,           /* Parsing context */
   Expr *pExpr,             /* The parsed expression of the default value */
   const char *zStart,      /* Start of the default value text */
-  const char *zEnd         /* First character past end of defaut value text */
+  const char *zEnd         /* First character past end of default value text */
 ){
   Table *p;
   Column *pCol;
