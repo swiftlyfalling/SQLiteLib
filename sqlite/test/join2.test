@@ -113,16 +113,16 @@ do_eqp_test 3.1 {
   SELECT v2 FROM t1 LEFT JOIN t2 USING (k2) LEFT JOIN t3_1 USING (k3);
 } {
   QUERY PLAN
-  |--SCAN TABLE t1
-  `--SEARCH TABLE t2 USING INTEGER PRIMARY KEY (rowid=?)
+  |--SCAN t1
+  `--SEARCH t2 USING INTEGER PRIMARY KEY (rowid=?)
 }
 
 do_eqp_test 3.2 {
   SELECT v2 FROM t1 LEFT JOIN t2 USING (k2) LEFT JOIN t3_2 USING (k3);
 } {
   QUERY PLAN
-  |--SCAN TABLE t1
-  `--SEARCH TABLE t2 USING INTEGER PRIMARY KEY (rowid=?)
+  |--SCAN t1
+  `--SEARCH t2 USING INTEGER PRIMARY KEY (rowid=?)
 }
 
 #-------------------------------------------------------------------------
@@ -161,16 +161,16 @@ do_eqp_test 4.1.5 {
   SELECT v1, v3 FROM c1 LEFT JOIN c2 ON (c2.k=v1) LEFT JOIN c3 ON (c3.k=v2);
 } {
   QUERY PLAN
-  |--SCAN TABLE c1
-  |--SEARCH TABLE c2 USING INTEGER PRIMARY KEY (rowid=?)
-  `--SEARCH TABLE c3 USING INTEGER PRIMARY KEY (rowid=?)
+  |--SCAN c1
+  |--SEARCH c2 USING INTEGER PRIMARY KEY (rowid=?)
+  `--SEARCH c3 USING INTEGER PRIMARY KEY (rowid=?)
 }
 do_eqp_test 4.1.6 {
   SELECT v1, v3 FROM c1 LEFT JOIN c2 ON (c2.k=v1) LEFT JOIN c3 ON (c3.k=v1+1);
 } {
   QUERY PLAN
-  |--SCAN TABLE c1
-  `--SEARCH TABLE c3 USING INTEGER PRIMARY KEY (rowid=?)
+  |--SCAN c1
+  `--SEARCH c3 USING INTEGER PRIMARY KEY (rowid=?)
 }
 
 do_execsql_test 4.2.0 {
@@ -208,16 +208,16 @@ do_eqp_test 4.2.5 {
   SELECT v1, v3 FROM c1 LEFT JOIN c2 ON (c2.k=v1) LEFT JOIN c3 ON (c3.k=v2);
 } {
   QUERY PLAN
-  |--SCAN TABLE c1
-  |--SEARCH TABLE c2 USING INDEX sqlite_autoindex_c2_1 (k=?)
-  `--SEARCH TABLE c3 USING INDEX sqlite_autoindex_c3_1 (k=?)
+  |--SCAN c1
+  |--SEARCH c2 USING INDEX sqlite_autoindex_c2_1 (k=?)
+  `--SEARCH c3 USING INDEX sqlite_autoindex_c3_1 (k=?)
 }
 do_eqp_test 4.2.6 {
   SELECT v1, v3 FROM c1 LEFT JOIN c2 ON (c2.k=v1) LEFT JOIN c3 ON (c3.k=v1+1);
 } {
   QUERY PLAN
-  |--SCAN TABLE c1
-  `--SEARCH TABLE c3 USING INDEX sqlite_autoindex_c3_1 (k=?)
+  |--SCAN c1
+  `--SEARCH c3 USING INDEX sqlite_autoindex_c3_1 (k=?)
 }
 
 # 2017-11-23 (Thanksgiving day)
@@ -251,11 +251,11 @@ do_execsql_test 5.0 {
 }
 do_eqp_test 5.1 {
   SELECT s1.a FROM s1 left join s2 using (a);
-} {SCAN TABLE s1}
+} {SCAN s1}
 
 do_eqp_test 5.2 {
   SELECT s1.a FROM s1 left join s3 using (a);
-} {SCAN TABLE s1}
+} {SCAN s1}
 
 do_execsql_test 6.0 {
   CREATE TABLE u1(a INTEGER PRIMARY KEY, b, c);
@@ -264,7 +264,7 @@ do_execsql_test 6.0 {
 }
 do_eqp_test 6.1 {
   SELECT u2.* FROM u2 LEFT JOIN u1 ON( u1.a=u2.a AND u1.b=u2.b AND u1.c=u2.c );
-} {SCAN TABLE u2}
+} {SCAN u2}
 
 db close
 sqlite3 db :memory:
@@ -294,7 +294,10 @@ do_execsql_test 8.1 {
 }
 
 #-------------------------------------------------------------------------
-# Ticket [45f4bf4eb].
+# Ticket [45f4bf4eb] reported by Manuel Rigger (2020-04-25)
+#
+# Follow up error reported by Eric Speckman on the SQLite forum
+# https://sqlite.org/forum/info/c49496d24d35bd7c (2020-08-19)
 #
 reset_db
 do_execsql_test 9.0 {
@@ -323,6 +326,18 @@ do_execsql_test 9.5 {
   SELECT * FROM t0 LEFT JOIN v0 ON v0.c0 >= '0' WHERE TRUE 
   UNION SELECT 0,0 WHERE 0; 
 } {0 0}
+
+do_execsql_test 9.10 {
+  CREATE TABLE t1 (aaa);
+  INSERT INTO t1 VALUES(23456);
+  CREATE TABLE t2(bbb);
+  CREATE VIEW v2(ccc) AS SELECT bbb IS 1234 FROM t2;
+  SELECT ccc, ccc IS NULL AS ddd FROM t1 LEFT JOIN v2;
+} {{} 1}
+optimization_control db query-flattener 0
+do_execsql_test 9.11 {
+  SELECT ccc, ccc IS NULL AS ddd FROM t1 LEFT JOIN v2;
+} {{} 1}
 
 
 finish_test

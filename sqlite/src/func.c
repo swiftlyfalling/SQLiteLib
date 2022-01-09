@@ -571,9 +571,9 @@ static void last_insert_rowid(
 /*
 ** Implementation of the changes() SQL function.
 **
-** IMP: R-62073-11209 The changes() SQL function is a wrapper
-** around the sqlite3_changes() C/C++ function and hence follows the same
-** rules for counting changes.
+** IMP: R-32760-32347 The changes() SQL function is a wrapper
+** around the sqlite3_changes64() C/C++ function and hence follows the
+** same rules for counting changes.
 */
 static void changes(
   sqlite3_context *context,
@@ -582,12 +582,12 @@ static void changes(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   UNUSED_PARAMETER2(NotUsed, NotUsed2);
-  sqlite3_result_int(context, sqlite3_changes(db));
+  sqlite3_result_int64(context, sqlite3_changes64(db));
 }
 
 /*
 ** Implementation of the total_changes() SQL function.  The return value is
-** the same as the sqlite3_total_changes() API function.
+** the same as the sqlite3_total_changes64() API function.
 */
 static void total_changes(
   sqlite3_context *context,
@@ -596,9 +596,9 @@ static void total_changes(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   UNUSED_PARAMETER2(NotUsed, NotUsed2);
-  /* IMP: R-52756-41993 This function is a wrapper around the
-  ** sqlite3_total_changes() C/C++ interface. */
-  sqlite3_result_int(context, sqlite3_total_changes(db));
+  /* IMP: R-11217-42568 This function is a wrapper around the
+  ** sqlite3_total_changes64() C/C++ interface. */
+  sqlite3_result_int64(context, sqlite3_total_changes64(db));
 }
 
 /*
@@ -694,7 +694,8 @@ static int patternCompare(
       /* Skip over multiple "*" characters in the pattern.  If there
       ** are also "?" characters, skip those as well, but consume a
       ** single character of the input string for each "?" skipped */
-      while( (c=Utf8Read(zPattern)) == matchAll || c == matchOne ){
+      while( (c=Utf8Read(zPattern)) == matchAll 
+             || (c == matchOne && matchOne!=0) ){
         if( c==matchOne && sqlite3Utf8Read(&zString)==0 ){
           return SQLITE_NOWILDCARDMATCH;
         }
@@ -1315,10 +1316,10 @@ static void trimFunc(
 ){
   const unsigned char *zIn;         /* Input string */
   const unsigned char *zCharSet;    /* Set of characters to trim */
-  int nIn;                          /* Number of bytes in input */
+  unsigned int nIn;                 /* Number of bytes in input */
   int flags;                        /* 1: trimleft  2: trimright  3: trim */
   int i;                            /* Loop counter */
-  unsigned char *aLen = 0;          /* Length of each character in zCharSet */
+  unsigned int *aLen = 0;           /* Length of each character in zCharSet */
   unsigned char **azChar = 0;       /* Individual characters in zCharSet */
   int nChar;                        /* Number of characters in zCharSet */
 
@@ -1327,13 +1328,13 @@ static void trimFunc(
   }
   zIn = sqlite3_value_text(argv[0]);
   if( zIn==0 ) return;
-  nIn = sqlite3_value_bytes(argv[0]);
+  nIn = (unsigned)sqlite3_value_bytes(argv[0]);
   assert( zIn==sqlite3_value_text(argv[0]) );
   if( argc==1 ){
-    static const unsigned char lenOne[] = { 1 };
+    static const unsigned lenOne[] = { 1 };
     static unsigned char * const azOne[] = { (u8*)" " };
     nChar = 1;
-    aLen = (u8*)lenOne;
+    aLen = (unsigned*)lenOne;
     azChar = (unsigned char **)azOne;
     zCharSet = 0;
   }else if( (zCharSet = sqlite3_value_text(argv[1]))==0 ){
@@ -1344,15 +1345,16 @@ static void trimFunc(
       SQLITE_SKIP_UTF8(z);
     }
     if( nChar>0 ){
-      azChar = contextMalloc(context, ((i64)nChar)*(sizeof(char*)+1));
+      azChar = contextMalloc(context, 
+                     ((i64)nChar)*(sizeof(char*)+sizeof(unsigned)));
       if( azChar==0 ){
         return;
       }
-      aLen = (unsigned char*)&azChar[nChar];
+      aLen = (unsigned*)&azChar[nChar];
       for(z=zCharSet, nChar=0; *z; nChar++){
         azChar[nChar] = (unsigned char *)z;
         SQLITE_SKIP_UTF8(z);
-        aLen[nChar] = (u8)(z - azChar[nChar]);
+        aLen[nChar] = (unsigned)(z - azChar[nChar]);
       }
     }
   }
@@ -1360,7 +1362,7 @@ static void trimFunc(
     flags = SQLITE_PTR_TO_INT(sqlite3_user_data(context));
     if( flags & 1 ){
       while( nIn>0 ){
-        int len = 0;
+        unsigned int len = 0;
         for(i=0; i<nChar; i++){
           len = aLen[i];
           if( len<=nIn && memcmp(zIn, azChar[i], len)==0 ) break;
@@ -1372,7 +1374,7 @@ static void trimFunc(
     }
     if( flags & 2 ){
       while( nIn>0 ){
-        int len = 0;
+        unsigned int len = 0;
         for(i=0; i<nChar; i++){
           len = aLen[i];
           if( len<=nIn && memcmp(&zIn[nIn-len],azChar[i],len)==0 ) break;
@@ -1713,97 +1715,167 @@ static void minMaxFinalize(sqlite3_context *context){
 
 /*
 ** group_concat(EXPR, ?SEPARATOR?)
+**
+** The SEPARATOR goes before the EXPR string.  This is tragic.  The
+** groupConcatInverse() implementation would have been easier if the
+** SEPARATOR were appended after EXPR.  And the order is undocumented,
+** so we could change it, in theory.  But the old behavior has been
+** around for so long that we dare not, for fear of breaking something.
 */
+typedef struct {
+  StrAccum str;          /* The accumulated concatenation */
+#ifndef SQLITE_OMIT_WINDOWFUNC
+  int nAccum;            /* Number of strings presently concatenated */
+  int nFirstSepLength;   /* Used to detect separator length change */
+  /* If pnSepLengths!=0, refs an array of inter-string separator lengths,
+  ** stored as actually incorporated into presently accumulated result.
+  ** (Hence, its slots in use number nAccum-1 between method calls.)
+  ** If pnSepLengths==0, nFirstSepLength is the length used throughout.
+  */
+  int *pnSepLengths;
+#endif
+} GroupConcatCtx;
+
 static void groupConcatStep(
   sqlite3_context *context,
   int argc,
   sqlite3_value **argv
 ){
   const char *zVal;
-  StrAccum *pAccum;
+  GroupConcatCtx *pGCC;
   const char *zSep;
   int nVal, nSep;
   assert( argc==1 || argc==2 );
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ) return;
-  pAccum = (StrAccum*)sqlite3_aggregate_context(context, sizeof(*pAccum));
-
-  if( pAccum ){
+  pGCC = (GroupConcatCtx*)sqlite3_aggregate_context(context, sizeof(*pGCC));
+  if( pGCC ){
     sqlite3 *db = sqlite3_context_db_handle(context);
-    int firstTerm = pAccum->mxAlloc==0;
-    pAccum->mxAlloc = db->aLimit[SQLITE_LIMIT_LENGTH];
-    if( !firstTerm ){
-      if( argc==2 ){
-        zSep = (char*)sqlite3_value_text(argv[1]);
-        nSep = sqlite3_value_bytes(argv[1]);
-      }else{
-        zSep = ",";
-        nSep = 1;
+    int firstTerm = pGCC->str.mxAlloc==0;
+    pGCC->str.mxAlloc = db->aLimit[SQLITE_LIMIT_LENGTH];
+    if( argc==1 ){
+      if( !firstTerm ){
+        sqlite3_str_appendchar(&pGCC->str, 1, ',');
       }
-      if( zSep ) sqlite3_str_append(pAccum, zSep, nSep);
+#ifndef SQLITE_OMIT_WINDOWFUNC
+      else{
+        pGCC->nFirstSepLength = 1;
+      }
+#endif
+    }else if( !firstTerm ){
+      zSep = (char*)sqlite3_value_text(argv[1]);
+      nSep = sqlite3_value_bytes(argv[1]);
+      if( zSep ){
+        sqlite3_str_append(&pGCC->str, zSep, nSep);
+      }
+#ifndef SQLITE_OMIT_WINDOWFUNC
+      else{
+        nSep = 0;
+      }
+      if( nSep != pGCC->nFirstSepLength || pGCC->pnSepLengths != 0 ){
+        int *pnsl = pGCC->pnSepLengths;
+        if( pnsl == 0 ){
+          /* First separator length variation seen, start tracking them. */
+          pnsl = (int*)sqlite3_malloc64((pGCC->nAccum+1) * sizeof(int));
+          if( pnsl!=0 ){
+            int i = 0, nA = pGCC->nAccum-1;
+            while( i<nA ) pnsl[i++] = pGCC->nFirstSepLength;
+          }
+        }else{
+          pnsl = (int*)sqlite3_realloc64(pnsl, pGCC->nAccum * sizeof(int));
+        }
+        if( pnsl!=0 ){
+          if( ALWAYS(pGCC->nAccum>0) ){
+            pnsl[pGCC->nAccum-1] = nSep;
+          }
+          pGCC->pnSepLengths = pnsl;
+        }else{
+          sqlite3StrAccumSetError(&pGCC->str, SQLITE_NOMEM);
+        }
+      }
+#endif
     }
+#ifndef SQLITE_OMIT_WINDOWFUNC
+    else{
+      pGCC->nFirstSepLength = sqlite3_value_bytes(argv[1]);
+    }
+    pGCC->nAccum += 1;
+#endif
     zVal = (char*)sqlite3_value_text(argv[0]);
     nVal = sqlite3_value_bytes(argv[0]);
-    if( zVal ) sqlite3_str_append(pAccum, zVal, nVal);
+    if( zVal ) sqlite3_str_append(&pGCC->str, zVal, nVal);
   }
 }
+
 #ifndef SQLITE_OMIT_WINDOWFUNC
 static void groupConcatInverse(
   sqlite3_context *context,
   int argc,
   sqlite3_value **argv
 ){
-  int n;
-  StrAccum *pAccum;
+  GroupConcatCtx *pGCC;
   assert( argc==1 || argc==2 );
+  (void)argc;  /* Suppress unused parameter warning */
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ) return;
-  pAccum = (StrAccum*)sqlite3_aggregate_context(context, sizeof(*pAccum));
-  /* pAccum is always non-NULL since groupConcatStep() will have always
+  pGCC = (GroupConcatCtx*)sqlite3_aggregate_context(context, sizeof(*pGCC));
+  /* pGCC is always non-NULL since groupConcatStep() will have always
   ** run frist to initialize it */
-  if( ALWAYS(pAccum) ){
-    n = sqlite3_value_bytes(argv[0]);
-    if( argc==2 ){
-      n += sqlite3_value_bytes(argv[1]);
+  if( ALWAYS(pGCC) ){
+    int nVS;
+    /* Must call sqlite3_value_text() to convert the argument into text prior
+    ** to invoking sqlite3_value_bytes(), in case the text encoding is UTF16 */
+    (void)sqlite3_value_text(argv[0]);
+    nVS = sqlite3_value_bytes(argv[0]);
+    pGCC->nAccum -= 1;
+    if( pGCC->pnSepLengths!=0 ){
+      assert(pGCC->nAccum >= 0);
+      if( pGCC->nAccum>0 ){
+        nVS += *pGCC->pnSepLengths;
+        memmove(pGCC->pnSepLengths, pGCC->pnSepLengths+1,
+               (pGCC->nAccum-1)*sizeof(int));
+      }
     }else{
-      n++;
+      /* If removing single accumulated string, harmlessly over-do. */
+      nVS += pGCC->nFirstSepLength;
     }
-    if( n>=(int)pAccum->nChar ){
-      pAccum->nChar = 0;
+    if( nVS>=(int)pGCC->str.nChar ){
+      pGCC->str.nChar = 0;
     }else{
-      pAccum->nChar -= n;
-      memmove(pAccum->zText, &pAccum->zText[n], pAccum->nChar);
+      pGCC->str.nChar -= nVS;
+      memmove(pGCC->str.zText, &pGCC->str.zText[nVS], pGCC->str.nChar);
     }
-    if( pAccum->nChar==0 ) pAccum->mxAlloc = 0;
+    if( pGCC->str.nChar==0 ){
+      pGCC->str.mxAlloc = 0;
+      sqlite3_free(pGCC->pnSepLengths);
+      pGCC->pnSepLengths = 0;
+    }
   }
 }
 #else
 # define groupConcatInverse 0
 #endif /* SQLITE_OMIT_WINDOWFUNC */
 static void groupConcatFinalize(sqlite3_context *context){
-  StrAccum *pAccum;
-  pAccum = sqlite3_aggregate_context(context, 0);
-  if( pAccum ){
-    if( pAccum->accError==SQLITE_TOOBIG ){
-      sqlite3_result_error_toobig(context);
-    }else if( pAccum->accError==SQLITE_NOMEM ){
-      sqlite3_result_error_nomem(context);
-    }else{    
-      sqlite3_result_text(context, sqlite3StrAccumFinish(pAccum), -1, 
-                          sqlite3_free);
-    }
+  GroupConcatCtx *pGCC
+    = (GroupConcatCtx*)sqlite3_aggregate_context(context, 0);
+  if( pGCC ){
+    sqlite3ResultStrAccum(context, &pGCC->str);
+#ifndef SQLITE_OMIT_WINDOWFUNC
+    sqlite3_free(pGCC->pnSepLengths);
+#endif
   }
 }
 #ifndef SQLITE_OMIT_WINDOWFUNC
 static void groupConcatValue(sqlite3_context *context){
-  sqlite3_str *pAccum;
-  pAccum = (sqlite3_str*)sqlite3_aggregate_context(context, 0);
-  if( pAccum ){
+  GroupConcatCtx *pGCC
+    = (GroupConcatCtx*)sqlite3_aggregate_context(context, 0);
+  if( pGCC ){
+    StrAccum *pAccum = &pGCC->str;
     if( pAccum->accError==SQLITE_TOOBIG ){
       sqlite3_result_error_toobig(context);
     }else if( pAccum->accError==SQLITE_NOMEM ){
       sqlite3_result_error_nomem(context);
     }else{    
       const char *zText = sqlite3_str_value(pAccum);
-      sqlite3_result_text(context, zText, -1, SQLITE_TRANSIENT);
+      sqlite3_result_text(context, zText, pAccum->nChar, SQLITE_TRANSIENT);
     }
   }
 }
@@ -1865,11 +1937,14 @@ void sqlite3RegisterLikeFunctions(sqlite3 *db, int caseSensitive){
 int sqlite3IsLikeFunction(sqlite3 *db, Expr *pExpr, int *pIsNocase, char *aWc){
   FuncDef *pDef;
   int nExpr;
-  if( pExpr->op!=TK_FUNCTION || !pExpr->x.pList ){
+  assert( pExpr!=0 );
+  assert( pExpr->op==TK_FUNCTION );
+  assert( ExprUseXList(pExpr) );
+  if( !pExpr->x.pList ){
     return 0;
   }
-  assert( !ExprHasProperty(pExpr, EP_xIsSelect) );
   nExpr = pExpr->x.pList->nExpr;
+  assert( !ExprHasProperty(pExpr, EP_IntValue) );
   pDef = sqlite3FindFunction(db, pExpr->u.zToken, nExpr, SQLITE_UTF8, 0);
 #ifdef SQLITE_ENABLE_UNKNOWN_SQL_FUNCTION
   if( pDef==0 ) return 0;
@@ -1893,6 +1968,7 @@ int sqlite3IsLikeFunction(sqlite3 *db, Expr *pExpr, int *pIsNocase, char *aWc){
     Expr *pEscape = pExpr->x.pList->a[2].pExpr;
     char *zEscape;
     if( pEscape->op!=TK_STRING ) return 0;
+    assert( !ExprHasProperty(pEscape, EP_IntValue) );
     zEscape = pEscape->u.zToken;
     if( zEscape[0]==0 || zEscape[1]!=0 ) return 0;
     if( zEscape[0]==aWc[0] ) return 0;
@@ -1902,6 +1978,201 @@ int sqlite3IsLikeFunction(sqlite3 *db, Expr *pExpr, int *pIsNocase, char *aWc){
 
   *pIsNocase = (pDef->funcFlags & SQLITE_FUNC_CASE)==0;
   return 1;
+}
+
+/* Mathematical Constants */
+#ifndef M_PI
+# define M_PI   3.141592653589793238462643383279502884
+#endif
+#ifndef M_LN10
+# define M_LN10 2.302585092994045684017991454684364208
+#endif
+#ifndef M_LN2
+# define M_LN2  0.693147180559945309417232121458176568
+#endif
+
+
+/* Extra math functions that require linking with -lm
+*/
+#ifdef SQLITE_ENABLE_MATH_FUNCTIONS
+/*
+** Implementation SQL functions:
+**
+**   ceil(X)
+**   ceiling(X)
+**   floor(X)
+**
+** The sqlite3_user_data() pointer is a pointer to the libm implementation
+** of the underlying C function.
+*/
+static void ceilingFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  assert( argc==1 );
+  switch( sqlite3_value_numeric_type(argv[0]) ){
+    case SQLITE_INTEGER: {
+       sqlite3_result_int64(context, sqlite3_value_int64(argv[0]));
+       break;
+    }
+    case SQLITE_FLOAT: {
+       double (*x)(double) = (double(*)(double))sqlite3_user_data(context);
+       sqlite3_result_double(context, x(sqlite3_value_double(argv[0])));
+       break;
+    }
+    default: {
+       break;
+    }
+  }
+}
+
+/*
+** On some systems, ceil() and floor() are intrinsic function.  You are
+** unable to take a pointer to these functions.  Hence, we here wrap them
+** in our own actual functions.
+*/
+static double xCeil(double x){ return ceil(x); }
+static double xFloor(double x){ return floor(x); }
+
+/*
+** Implementation of SQL functions:
+**
+**   ln(X)       - natural logarithm
+**   log(X)      - log X base 10
+**   log10(X)    - log X base 10
+**   log(B,X)    - log X base B
+*/
+static void logFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  double x, b, ans;
+  assert( argc==1 || argc==2 );
+  switch( sqlite3_value_numeric_type(argv[0]) ){
+    case SQLITE_INTEGER:
+    case SQLITE_FLOAT:
+      x = sqlite3_value_double(argv[0]);
+      if( x<=0.0 ) return;
+      break;
+    default:
+      return;
+  }
+  if( argc==2 ){
+    switch( sqlite3_value_numeric_type(argv[0]) ){
+      case SQLITE_INTEGER:
+      case SQLITE_FLOAT:
+        b = log(x);
+        if( b<=0.0 ) return;
+        x = sqlite3_value_double(argv[1]);
+        if( x<=0.0 ) return;
+        break;
+     default:
+        return;
+    }
+    ans = log(x)/b;
+  }else{
+    ans = log(x);
+    switch( SQLITE_PTR_TO_INT(sqlite3_user_data(context)) ){
+      case 1:
+        /* Convert from natural logarithm to log base 10 */
+        ans *= 1.0/M_LN10;
+        break;
+      case 2:
+        /* Convert from natural logarithm to log base 2 */
+        ans *= 1.0/M_LN2;
+        break;
+      default:
+        break;
+    }
+  }
+  sqlite3_result_double(context, ans);
+}
+
+/*
+** Functions to converts degrees to radians and radians to degrees.
+*/
+static double degToRad(double x){ return x*(M_PI/180.0); }
+static double radToDeg(double x){ return x*(180.0/M_PI); }
+
+/*
+** Implementation of 1-argument SQL math functions:
+**
+**   exp(X)  - Compute e to the X-th power
+*/
+static void math1Func(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  int type0;
+  double v0, ans;
+  double (*x)(double);
+  assert( argc==1 );
+  type0 = sqlite3_value_numeric_type(argv[0]);
+  if( type0!=SQLITE_INTEGER && type0!=SQLITE_FLOAT ) return;
+  v0 = sqlite3_value_double(argv[0]);
+  x = (double(*)(double))sqlite3_user_data(context);
+  ans = x(v0);
+  sqlite3_result_double(context, ans);
+}
+
+/*
+** Implementation of 2-argument SQL math functions:
+**
+**   power(X,Y)  - Compute X to the Y-th power
+*/
+static void math2Func(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  int type0, type1;
+  double v0, v1, ans;
+  double (*x)(double,double);
+  assert( argc==2 );
+  type0 = sqlite3_value_numeric_type(argv[0]);
+  if( type0!=SQLITE_INTEGER && type0!=SQLITE_FLOAT ) return;
+  type1 = sqlite3_value_numeric_type(argv[1]);
+  if( type1!=SQLITE_INTEGER && type1!=SQLITE_FLOAT ) return;
+  v0 = sqlite3_value_double(argv[0]);
+  v1 = sqlite3_value_double(argv[1]);
+  x = (double(*)(double,double))sqlite3_user_data(context);
+  ans = x(v0, v1);
+  sqlite3_result_double(context, ans);
+}
+
+/*
+** Implementation of 0-argument pi() function.
+*/
+static void piFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  assert( argc==0 );
+  sqlite3_result_double(context, M_PI);
+}
+
+#endif /* SQLITE_ENABLE_MATH_FUNCTIONS */
+
+/*
+** Implementation of sign(X) function.
+*/
+static void signFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  int type0;
+  double x;
+  UNUSED_PARAMETER(argc);
+  assert( argc==1 );
+  type0 = sqlite3_value_numeric_type(argv[0]);
+  if( type0!=SQLITE_INTEGER && type0!=SQLITE_FLOAT ) return;
+  x = sqlite3_value_double(argv[0]);
+  sqlite3_result_int(context, x<0.0 ? -1 : x>0.0 ? +1 : 0);
 }
 
 /*
@@ -1924,12 +2195,12 @@ void sqlite3RegisterBuiltinFunctions(void){
   */
   static FuncDef aBuiltinFunc[] = {
 /***** Functions only available with SQLITE_TESTCTRL_INTERNAL_FUNCTIONS *****/
+#if !defined(SQLITE_UNTESTABLE)
     TEST_FUNC(implies_nonnull_row, 2, INLINEFUNC_implies_nonnull_row, 0),
     TEST_FUNC(expr_compare,        2, INLINEFUNC_expr_compare,        0),
     TEST_FUNC(expr_implies_expr,   2, INLINEFUNC_expr_implies_expr,   0),
-#ifdef SQLITE_DEBUG
-    TEST_FUNC(affinity,          1, INLINEFUNC_affinity, 0),
-#endif
+    TEST_FUNC(affinity,            1, INLINEFUNC_affinity,            0),
+#endif /* !defined(SQLITE_UNTESTABLE) */
 /***** Regular functions *****/
 #ifdef SQLITE_SOUNDEX
     FUNCTION(soundex,            1, 0, 0, soundexFunc      ),
@@ -1961,11 +2232,11 @@ void sqlite3RegisterBuiltinFunctions(void){
     FUNCTION(min,               -1, 0, 1, minmaxFunc       ),
     FUNCTION(min,                0, 0, 1, 0                ),
     WAGGREGATE(min, 1, 0, 1, minmaxStep, minMaxFinalize, minMaxValue, 0,
-                                          SQLITE_FUNC_MINMAX ),
+                                 SQLITE_FUNC_MINMAX|SQLITE_FUNC_ANYORDER ),
     FUNCTION(max,               -1, 1, 1, minmaxFunc       ),
     FUNCTION(max,                0, 1, 1, 0                ),
     WAGGREGATE(max, 1, 1, 1, minmaxStep, minMaxFinalize, minMaxValue, 0,
-                                          SQLITE_FUNC_MINMAX ),
+                                 SQLITE_FUNC_MINMAX|SQLITE_FUNC_ANYORDER ),
     FUNCTION2(typeof,            1, 0, 0, typeofFunc,  SQLITE_FUNC_TYPEOF),
     FUNCTION2(length,            1, 0, 0, lengthFunc,  SQLITE_FUNC_LENGTH),
     FUNCTION(instr,              2, 0, 0, instrFunc        ),
@@ -1995,13 +2266,16 @@ void sqlite3RegisterBuiltinFunctions(void){
     FUNCTION(zeroblob,           1, 0, 0, zeroblobFunc     ),
     FUNCTION(substr,             2, 0, 0, substrFunc       ),
     FUNCTION(substr,             3, 0, 0, substrFunc       ),
+    FUNCTION(substring,          2, 0, 0, substrFunc       ),
+    FUNCTION(substring,          3, 0, 0, substrFunc       ),
     WAGGREGATE(sum,   1,0,0, sumStep, sumFinalize, sumFinalize, sumInverse, 0),
     WAGGREGATE(total, 1,0,0, sumStep,totalFinalize,totalFinalize,sumInverse, 0),
     WAGGREGATE(avg,   1,0,0, sumStep, avgFinalize, avgFinalize, sumInverse, 0),
     WAGGREGATE(count, 0,0,0, countStep, 
-        countFinalize, countFinalize, countInverse, SQLITE_FUNC_COUNT  ),
+        countFinalize, countFinalize, countInverse,
+        SQLITE_FUNC_COUNT|SQLITE_FUNC_ANYORDER  ),
     WAGGREGATE(count, 1,0,0, countStep, 
-        countFinalize, countFinalize, countInverse, 0  ),
+        countFinalize, countFinalize, countInverse, SQLITE_FUNC_ANYORDER ),
     WAGGREGATE(group_concat, 1, 0, 0, groupConcatStep, 
         groupConcatFinalize, groupConcatValue, groupConcatInverse, 0),
     WAGGREGATE(group_concat, 2, 0, 0, groupConcatStep, 
@@ -2020,6 +2294,43 @@ void sqlite3RegisterBuiltinFunctions(void){
 #endif
     FUNCTION(coalesce,           1, 0, 0, 0                ),
     FUNCTION(coalesce,           0, 0, 0, 0                ),
+#ifdef SQLITE_ENABLE_MATH_FUNCTIONS
+    MFUNCTION(ceil,              1, xCeil,     ceilingFunc ),
+    MFUNCTION(ceiling,           1, xCeil,     ceilingFunc ),
+    MFUNCTION(floor,             1, xFloor,    ceilingFunc ),
+#if SQLITE_HAVE_C99_MATH_FUNCS
+    MFUNCTION(trunc,             1, trunc,     ceilingFunc ),
+#endif
+    FUNCTION(ln,                 1, 0, 0,      logFunc     ),
+    FUNCTION(log,                1, 1, 0,      logFunc     ),
+    FUNCTION(log10,              1, 1, 0,      logFunc     ),
+    FUNCTION(log2,               1, 2, 0,      logFunc     ),
+    FUNCTION(log,                2, 0, 0,      logFunc     ),
+    MFUNCTION(exp,               1, exp,       math1Func   ),
+    MFUNCTION(pow,               2, pow,       math2Func   ),
+    MFUNCTION(power,             2, pow,       math2Func   ),
+    MFUNCTION(mod,               2, fmod,      math2Func   ),
+    MFUNCTION(acos,              1, acos,      math1Func   ),
+    MFUNCTION(asin,              1, asin,      math1Func   ),
+    MFUNCTION(atan,              1, atan,      math1Func   ),
+    MFUNCTION(atan2,             2, atan2,     math2Func   ),
+    MFUNCTION(cos,               1, cos,       math1Func   ),
+    MFUNCTION(sin,               1, sin,       math1Func   ),
+    MFUNCTION(tan,               1, tan,       math1Func   ),
+    MFUNCTION(cosh,              1, cosh,      math1Func   ),
+    MFUNCTION(sinh,              1, sinh,      math1Func   ),
+    MFUNCTION(tanh,              1, tanh,      math1Func   ),
+#if SQLITE_HAVE_C99_MATH_FUNCS
+    MFUNCTION(acosh,             1, acosh,     math1Func   ),
+    MFUNCTION(asinh,             1, asinh,     math1Func   ),
+    MFUNCTION(atanh,             1, atanh,     math1Func   ),
+#endif
+    MFUNCTION(sqrt,              1, sqrt,      math1Func   ),
+    MFUNCTION(radians,           1, degToRad,  math1Func   ),
+    MFUNCTION(degrees,           1, radToDeg,  math1Func   ),
+    FUNCTION(pi,                 0, 0, 0,      piFunc      ),
+#endif /* SQLITE_ENABLE_MATH_FUNCTIONS */
+    FUNCTION(sign,               1, 0, 0,      signFunc    ),
     INLINE_FUNC(coalesce,       -1, INLINEFUNC_coalesce, 0 ),
     INLINE_FUNC(iif,             3, INLINEFUNC_iif,      0 ),
   };
@@ -2039,6 +2350,7 @@ void sqlite3RegisterBuiltinFunctions(void){
       for(p=sqlite3BuiltinFunctions.a[i]; p; p=p->u.pHash){
         int n = sqlite3Strlen30(p->zName);
         int h = p->zName[0] + n;
+        assert( p->funcFlags & SQLITE_FUNC_BUILTIN );
         printf(" %s(%d)", p->zName, h);
       }
       printf("\n");

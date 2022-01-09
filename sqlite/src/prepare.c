@@ -21,7 +21,7 @@
 */
 static void corruptSchema(
   InitData *pData,     /* Initialization context */
-  const char *zObj,    /* Object being parsed at the point of error */
+  char **azObj,        /* Type and name of object being parsed */
   const char *zExtra   /* Error information */
 ){
   sqlite3 *db = pData->db;
@@ -29,14 +29,23 @@ static void corruptSchema(
     pData->rc = SQLITE_NOMEM_BKPT;
   }else if( pData->pzErrMsg[0]!=0 ){
     /* A error message has already been generated.  Do not overwrite it */
-  }else if( pData->mInitFlags & INITFLAG_AlterTable ){
-    *pData->pzErrMsg = sqlite3DbStrDup(db, zExtra);
+  }else if( pData->mInitFlags & (INITFLAG_AlterMask) ){
+    static const char *azAlterType[] = {
+       "rename",
+       "drop column",
+       "add column"
+    };
+    *pData->pzErrMsg = sqlite3MPrintf(db, 
+        "error in %s %s after %s: %s", azObj[0], azObj[1], 
+        azAlterType[(pData->mInitFlags&INITFLAG_AlterMask)-1], 
+        zExtra
+    );
     pData->rc = SQLITE_ERROR;
   }else if( db->flags & SQLITE_WriteSchema ){
     pData->rc = SQLITE_CORRUPT_BKPT;
   }else{
     char *z;
-    if( zObj==0 ) zObj = "?";
+    const char *zObj = azObj[1] ? azObj[1] : "?";
     z = sqlite3MPrintf(db, "malformed database schema (%s)", zObj);
     if( zExtra && zExtra[0] ) z = sqlite3MPrintf(db, "%z - %s", z, zExtra);
     *pData->pzErrMsg = z;
@@ -92,21 +101,28 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
   UNUSED_PARAMETER2(NotUsed, argc);
   assert( sqlite3_mutex_held(db->mutex) );
   db->mDbFlags |= DBFLAG_EncodingFixed;
+  if( argv==0 ) return 0;   /* Might happen if EMPTY_RESULT_CALLBACKS are on */
   pData->nInitRow++;
   if( db->mallocFailed ){
-    corruptSchema(pData, argv[1], 0);
+    corruptSchema(pData, argv, 0);
     return 1;
   }
 
   assert( iDb>=0 && iDb<db->nDb );
-  if( argv==0 ) return 0;   /* Might happen if EMPTY_RESULT_CALLBACKS are on */
   if( argv[3]==0 ){
-    corruptSchema(pData, argv[1], 0);
-  }else if( sqlite3_strnicmp(argv[4],"create ",7)==0 ){
+    corruptSchema(pData, argv, 0);
+  }else if( argv[4]
+         && 'c'==sqlite3UpperToLower[(unsigned char)argv[4][0]]
+         && 'r'==sqlite3UpperToLower[(unsigned char)argv[4][1]] ){
     /* Call the parser to process a CREATE TABLE, INDEX or VIEW.
     ** But because db->init.busy is set to 1, no VDBE code is generated
     ** or executed.  All the parser does is build the internal data
     ** structures that describe the table, index, or view.
+    **
+    ** No other valid SQL statement, other than the variable CREATE statements,
+    ** can begin with the letters "C" and "R".  Thus, it is not possible run
+    ** any other kind of statement while parsing the schema, even a corrupt
+    ** schema.
     */
     int rc;
     u8 saved_iDb = db->init.iDb;
@@ -119,11 +135,11 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
      || (db->init.newTnum>pData->mxPage && pData->mxPage>0)
     ){
       if( sqlite3Config.bExtraSchemaChecks ){
-        corruptSchema(pData, argv[1], "invalid rootpage");
+        corruptSchema(pData, argv, "invalid rootpage");
       }
     }
     db->init.orphanTrigger = 0;
-    db->init.azInit = argv;
+    db->init.azInit = (const char**)argv;
     pStmt = 0;
     TESTONLY(rcp = ) sqlite3Prepare(db, argv[4], -1, 0, 0, &pStmt, 0);
     rc = db->errCode;
@@ -138,13 +154,14 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
         if( rc==SQLITE_NOMEM ){
           sqlite3OomFault(db);
         }else if( rc!=SQLITE_INTERRUPT && (rc&0xFF)!=SQLITE_LOCKED ){
-          corruptSchema(pData, argv[1], sqlite3_errmsg(db));
+          corruptSchema(pData, argv, sqlite3_errmsg(db));
         }
       }
     }
+    db->init.azInit = sqlite3StdType; /* Any array of string ptrs will do */
     sqlite3_finalize(pStmt);
   }else if( argv[1]==0 || (argv[4]!=0 && argv[4][0]!=0) ){
-    corruptSchema(pData, argv[1], 0);
+    corruptSchema(pData, argv, 0);
   }else{
     /* If the SQL column is blank it means this is an index that
     ** was created to be the PRIMARY KEY or to fulfill a UNIQUE
@@ -155,7 +172,7 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
     Index *pIndex;
     pIndex = sqlite3FindIndex(db, argv[1], db->aDb[iDb].zDbSName);
     if( pIndex==0 ){
-      corruptSchema(pData, argv[1], "orphan index");
+      corruptSchema(pData, argv, "orphan index");
     }else
     if( sqlite3GetUInt32(argv[3],&pIndex->tnum)==0
      || pIndex->tnum<2
@@ -163,7 +180,7 @@ int sqlite3InitCallback(void *pInit, int argc, char **argv, char **NotUsed){
      || sqlite3IndexHasDuplicateRootPage(pIndex)
     ){
       if( sqlite3Config.bExtraSchemaChecks ){
-        corruptSchema(pData, argv[1], "invalid rootpage");
+        corruptSchema(pData, argv, "invalid rootpage");
       }
     }
   }
@@ -240,7 +257,7 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
   ** on the b-tree database, open one now. If a transaction is opened, it 
   ** will be closed before this function returns.  */
   sqlite3BtreeEnter(pDb->pBt);
-  if( !sqlite3BtreeIsInReadTrans(pDb->pBt) ){
+  if( sqlite3BtreeTxnState(pDb->pBt)==SQLITE_TXN_NONE ){
     rc = sqlite3BtreeBeginTrans(pDb->pBt, 0, 0);
     if( rc!=SQLITE_OK ){
       sqlite3SetString(pzErrMsg, db, sqlite3ErrStr(rc));
@@ -366,18 +383,22 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
     }
 #endif
   }
+  assert( pDb == &(db->aDb[iDb]) );
   if( db->mallocFailed ){
     rc = SQLITE_NOMEM_BKPT;
     sqlite3ResetAllSchemasOfConnection(db);
-  }
+    pDb = &db->aDb[iDb];
+  }else
   if( rc==SQLITE_OK || (db->flags&SQLITE_NoSchemaError)){
-    /* Black magic: If the SQLITE_NoSchemaError flag is set, then consider
-    ** the schema loaded, even if errors occurred. In this situation the 
-    ** current sqlite3_prepare() operation will fail, but the following one
-    ** will attempt to compile the supplied statement against whatever subset
-    ** of the schema was loaded before the error occurred. The primary
-    ** purpose of this is to allow access to the sqlite_schema table
-    ** even when its contents have been corrupted.
+    /* Hack: If the SQLITE_NoSchemaError flag is set, then consider
+    ** the schema loaded, even if errors (other than OOM) occurred. In
+    ** this situation the current sqlite3_prepare() operation will fail,
+    ** but the following one will attempt to compile the supplied statement
+    ** against whatever subset of the schema was loaded before the error
+    ** occurred.
+    **
+    ** The primary purpose of this is to allow access to the sqlite_schema
+    ** table even when its contents have been corrupted.
     */
     DbSetProperty(db, iDb, DB_SchemaLoaded);
     rc = SQLITE_OK;
@@ -483,10 +504,11 @@ static void schemaIsValid(Parse *pParse){
     /* If there is not already a read-only (or read-write) transaction opened
     ** on the b-tree database, open one now. If a transaction is opened, it 
     ** will be closed immediately after reading the meta-value. */
-    if( !sqlite3BtreeIsInReadTrans(pBt) ){
+    if( sqlite3BtreeTxnState(pBt)==SQLITE_TXN_NONE ){
       rc = sqlite3BtreeBeginTrans(pBt, 0, 0);
       if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
         sqlite3OomFault(db);
+        pParse->rc = SQLITE_NOMEM;
       }
       if( rc!=SQLITE_OK ) return;
       openedTransaction = 1;
@@ -544,33 +566,75 @@ int sqlite3SchemaToIndex(sqlite3 *db, Schema *pSchema){
 }
 
 /*
-** Deallocate a single AggInfo object
-*/
-static void agginfoFree(sqlite3 *db, AggInfo *p){
-  sqlite3DbFree(db, p->aCol);
-  sqlite3DbFree(db, p->aFunc);
-  sqlite3DbFree(db, p);
-}
-
-/*
 ** Free all memory allocations in the pParse object
 */
 void sqlite3ParserReset(Parse *pParse){
   sqlite3 *db = pParse->db;
-  AggInfo *pThis = pParse->pAggList;
-  while( pThis ){
-    AggInfo *pNext = pThis->pNext;
-    agginfoFree(db, pThis);
-    pThis = pNext;
+  while( pParse->pCleanup ){
+    ParseCleanup *pCleanup = pParse->pCleanup;
+    pParse->pCleanup = pCleanup->pNext;
+    pCleanup->xCleanup(db, pCleanup->pPtr);
+    sqlite3DbFreeNN(db, pCleanup);
   }
   sqlite3DbFree(db, pParse->aLabel);
-  sqlite3ExprListDelete(db, pParse->pConstExpr);
+  if( pParse->pConstExpr ){
+    sqlite3ExprListDelete(db, pParse->pConstExpr);
+  }
   if( db ){
     assert( db->lookaside.bDisable >= pParse->disableLookaside );
     db->lookaside.bDisable -= pParse->disableLookaside;
     db->lookaside.sz = db->lookaside.bDisable ? 0 : db->lookaside.szTrue;
   }
   pParse->disableLookaside = 0;
+}
+
+/*
+** Add a new cleanup operation to a Parser.  The cleanup should happen when
+** the parser object is destroyed.  But, beware: the cleanup might happen
+** immediately.
+**
+** Use this mechanism for uncommon cleanups.  There is a higher setup
+** cost for this mechansim (an extra malloc), so it should not be used
+** for common cleanups that happen on most calls.  But for less
+** common cleanups, we save a single NULL-pointer comparison in
+** sqlite3ParserReset(), which reduces the total CPU cycle count.
+**
+** If a memory allocation error occurs, then the cleanup happens immediately.
+** When either SQLITE_DEBUG or SQLITE_COVERAGE_TEST are defined, the
+** pParse->earlyCleanup flag is set in that case.  Calling code show verify
+** that test cases exist for which this happens, to guard against possible
+** use-after-free errors following an OOM.  The preferred way to do this is
+** to immediately follow the call to this routine with:
+**
+**       testcase( pParse->earlyCleanup );
+**
+** This routine returns a copy of its pPtr input (the third parameter)
+** except if an early cleanup occurs, in which case it returns NULL.  So
+** another way to check for early cleanup is to check the return value.
+** Or, stop using the pPtr parameter with this call and use only its
+** return value thereafter.  Something like this:
+**
+**       pObj = sqlite3ParserAddCleanup(pParse, destructor, pObj);
+*/
+void *sqlite3ParserAddCleanup(
+  Parse *pParse,                      /* Destroy when this Parser finishes */
+  void (*xCleanup)(sqlite3*,void*),   /* The cleanup routine */
+  void *pPtr                          /* Pointer to object to be cleaned up */
+){
+  ParseCleanup *pCleanup = sqlite3DbMallocRaw(pParse->db, sizeof(*pCleanup));
+  if( pCleanup ){
+    pCleanup->pNext = pParse->pCleanup;
+    pParse->pCleanup = pCleanup;
+    pCleanup->pPtr = pPtr;
+    pCleanup->xCleanup = xCleanup;
+  }else{
+    xCleanup(pParse->db, pPtr);
+    pPtr = 0;
+#if defined(SQLITE_DEBUG) || defined(SQLITE_COVERAGE_TEST)
+    pParse->earlyCleanup = 1;
+#endif
+  }
+  return pPtr;
 }
 
 /*
@@ -671,12 +735,6 @@ static int sqlite3Prepare(
   }
   assert( 0==sParse.nQueryLoop );
 
-  if( sParse.rc==SQLITE_DONE ){
-    sParse.rc = SQLITE_OK;
-  }
-  if( sParse.checkSchema ){
-    schemaIsValid(&sParse);
-  }
   if( pzTail ){
     *pzTail = sParse.zTail;
   }
@@ -686,21 +744,30 @@ static int sqlite3Prepare(
   }
   if( db->mallocFailed ){
     sParse.rc = SQLITE_NOMEM_BKPT;
+    sParse.checkSchema = 0;
   }
-  rc = sParse.rc;
-  if( rc!=SQLITE_OK ){
-    if( sParse.pVdbe ) sqlite3VdbeFinalize(sParse.pVdbe);
-    assert(!(*ppStmt));
+  if( sParse.rc!=SQLITE_OK && sParse.rc!=SQLITE_DONE ){
+    if( sParse.checkSchema && db->init.busy==0 ){
+      schemaIsValid(&sParse);
+    }
+    if( sParse.pVdbe ){
+      sqlite3VdbeFinalize(sParse.pVdbe);
+    }
+    assert( 0==(*ppStmt) );
+    rc = sParse.rc;
+    if( zErrMsg ){
+      sqlite3ErrorWithMsg(db, rc, "%s", zErrMsg);
+      sqlite3DbFree(db, zErrMsg);
+    }else{
+      sqlite3Error(db, rc);
+    }
   }else{
+    assert( zErrMsg==0 );
     *ppStmt = (sqlite3_stmt*)sParse.pVdbe;
+    rc = SQLITE_OK;
+    sqlite3ErrorClear(db);
   }
 
-  if( zErrMsg ){
-    sqlite3ErrorWithMsg(db, rc, "%s", zErrMsg);
-    sqlite3DbFree(db, zErrMsg);
-  }else{
-    sqlite3Error(db, rc);
-  }
 
   /* Delete any TriggerPrg structures allocated while parsing this statement. */
   while( sParse.pTriggerPrg ){
@@ -741,11 +808,13 @@ static int sqlite3LockAndPrepare(
     ** reset is considered a permanent error. */
     rc = sqlite3Prepare(db, zSql, nBytes, prepFlags, pOld, ppStmt, pzTail);
     assert( rc==SQLITE_OK || *ppStmt==0 );
+    if( rc==SQLITE_OK || db->mallocFailed ) break;
   }while( rc==SQLITE_ERROR_RETRY
        || (rc==SQLITE_SCHEMA && (sqlite3ResetOneSchema(db,-1), cnt++)==0) );
   sqlite3BtreeLeaveAll(db);
   rc = sqlite3ApiExit(db, rc);
   assert( (rc&db->errMask)==rc );
+  db->busyHandler.nBusy = 0;
   sqlite3_mutex_leave(db->mutex);
   return rc;
 }

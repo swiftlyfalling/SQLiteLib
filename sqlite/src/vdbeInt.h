@@ -86,7 +86,8 @@ struct VdbeCursor {
   Bool isEphemeral:1;     /* True for an ephemeral table */
   Bool useRandomRowid:1;  /* Generate new record numbers semi-randomly */
   Bool isOrdered:1;       /* True if the table is not BTREE_UNORDERED */
-  Bool seekHit:1;         /* See the OP_SeekHit and OP_IfNoHope opcodes */
+  Bool hasBeenDuped:1;    /* This cursor was source or target of OP_OpenDup */
+  u16 seekHit;            /* See the OP_SeekHit and OP_IfNoHope opcodes */
   Btree *pBtx;            /* Separate file holding temporary table */
   i64 seqCount;           /* Sequence counter */
   u32 *aAltMap;           /* Mapping from table to index column numbers */
@@ -179,8 +180,8 @@ struct VdbeFrame {
   int nMem;               /* Number of entries in aMem */
   int nChildMem;          /* Number of memory cells for child frame */
   int nChildCsr;          /* Number of cursors for child frame */
-  int nChange;            /* Statement changes (Vdbe.nChange)     */
-  int nDbChange;          /* Value of db->nChange */
+  i64 nChange;            /* Statement changes (Vdbe.nChange)     */
+  i64 nDbChange;          /* Value of db->nChange */
 };
 
 /* Magic number for sanity checking on VdbeFrame objects */
@@ -381,13 +382,13 @@ struct Vdbe {
   Vdbe *pPrev,*pNext;     /* Linked list of VDBEs with the same Vdbe.db */
   Parse *pParse;          /* Parsing context used to create this Vdbe */
   ynVar nVar;             /* Number of entries in aVar[] */
-  u32 magic;              /* Magic number for sanity checking */
+  u32 iVdbeMagic;         /* Magic number defining state of the SQL statement */
   int nMem;               /* Number of memory locations currently allocated */
   int nCursor;            /* Number of slots in apCsr[] */
   u32 cacheCtr;           /* VdbeCursor row cache generation counter */
   int pc;                 /* The program counter */
   int rc;                 /* Value to return */
-  int nChange;            /* Number of db changes made since last reset */
+  i64 nChange;            /* Number of db changes made since last reset */
   int iStatement;         /* Statement number (or 0 if has no opened stmt) */
   i64 iCurrentTime;       /* Value of julianday('now') for this statement */
   i64 nFkConstraint;      /* Number of imm. FK constraints this VM */
@@ -471,6 +472,7 @@ struct PreUpdate {
   UnpackedRecord *pUnpacked;      /* Unpacked version of aRecord[] */
   UnpackedRecord *pNewUnpacked;   /* Unpacked version of new.* record */
   int iNewReg;                    /* Register for new.* values */
+  int iBlobWrite;                 /* Value returned by preupdate_blobwrite() */
   i64 iKey1;                      /* First key value passed to hook */
   i64 iKey2;                      /* Second key value passed to hook */
   Mem *aNew;                      /* Array of new.* values */
@@ -514,7 +516,7 @@ int sqlite3VdbeMemCopy(Mem*, const Mem*);
 void sqlite3VdbeMemShallowCopy(Mem*, const Mem*, int);
 void sqlite3VdbeMemMove(Mem*, Mem*);
 int sqlite3VdbeMemNulTerminate(Mem*);
-int sqlite3VdbeMemSetStr(Mem*, const char*, int, u8, void(*)(void*));
+int sqlite3VdbeMemSetStr(Mem*, const char*, i64, u8, void(*)(void*));
 void sqlite3VdbeMemSetInt64(Mem*, i64);
 #ifdef SQLITE_OMIT_FLOATING_POINT
 # define sqlite3VdbeMemSetDouble sqlite3VdbeMemSetInt64
@@ -524,13 +526,18 @@ void sqlite3VdbeMemSetInt64(Mem*, i64);
 void sqlite3VdbeMemSetPointer(Mem*, void*, const char*, void(*)(void*));
 void sqlite3VdbeMemInit(Mem*,sqlite3*,u16);
 void sqlite3VdbeMemSetNull(Mem*);
+#ifndef SQLITE_OMIT_INCRBLOB
 void sqlite3VdbeMemSetZeroBlob(Mem*,int);
+#else
+int sqlite3VdbeMemSetZeroBlob(Mem*,int);
+#endif
 #ifdef SQLITE_DEBUG
 int sqlite3VdbeMemIsRowSet(const Mem*);
 #endif
 int sqlite3VdbeMemSetRowSet(Mem*);
 int sqlite3VdbeMemMakeWriteable(Mem*);
 int sqlite3VdbeMemStringify(Mem*, u8, u8);
+int sqlite3IntFloatCompare(i64,double);
 i64 sqlite3VdbeIntValue(Mem*);
 int sqlite3VdbeMemIntegerify(Mem*);
 double sqlite3VdbeRealValue(Mem*);
@@ -559,7 +566,8 @@ void sqlite3VdbeFrameMemDel(void*);      /* Destructor on Mem */
 void sqlite3VdbeFrameDelete(VdbeFrame*); /* Actually deletes the Frame */
 int sqlite3VdbeFrameRestore(VdbeFrame *);
 #ifdef SQLITE_ENABLE_PREUPDATE_HOOK
-void sqlite3VdbePreUpdateHook(Vdbe*,VdbeCursor*,int,const char*,Table*,i64,int);
+void sqlite3VdbePreUpdateHook(
+    Vdbe*,VdbeCursor*,int,const char*,Table*,i64,int,int);
 #endif
 int sqlite3VdbeTransferError(Vdbe *p);
 

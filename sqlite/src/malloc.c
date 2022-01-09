@@ -161,7 +161,6 @@ int sqlite3MallocInit(void){
   if( sqlite3GlobalConfig.m.xMalloc==0 ){
     sqlite3MemSetDefault();
   }
-  memset(&mem0, 0, sizeof(mem0));
   mem0.mutex = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_MEM);
   if( sqlite3GlobalConfig.pPage==0 || sqlite3GlobalConfig.szPage<512
       || sqlite3GlobalConfig.nPage<=0 ){
@@ -317,7 +316,7 @@ void *sqlite3_malloc64(sqlite3_uint64 n){
 ** TRUE if p is a lookaside memory allocation from db
 */
 #ifndef SQLITE_OMIT_LOOKASIDE
-static int isLookaside(sqlite3 *db, void *p){
+static int isLookaside(sqlite3 *db, const void *p){
   return SQLITE_WITHIN(p, db->lookaside.pStart, db->lookaside.pEnd);
 }
 #else
@@ -328,18 +327,18 @@ static int isLookaside(sqlite3 *db, void *p){
 ** Return the size of a memory allocation previously obtained from
 ** sqlite3Malloc() or sqlite3_malloc().
 */
-int sqlite3MallocSize(void *p){
+int sqlite3MallocSize(const void *p){
   assert( sqlite3MemdebugHasType(p, MEMTYPE_HEAP) );
-  return sqlite3GlobalConfig.m.xSize(p);
+  return sqlite3GlobalConfig.m.xSize((void*)p);
 }
-static int lookasideMallocSize(sqlite3 *db, void *p){
+static int lookasideMallocSize(sqlite3 *db, const void *p){
 #ifndef SQLITE_OMIT_TWOSIZE_LOOKASIDE    
   return p<db->lookaside.pMiddle ? db->lookaside.szTrue : LOOKASIDE_SMALL;
 #else
   return db->lookaside.szTrue;
 #endif  
 }
-int sqlite3DbMallocSize(sqlite3 *db, void *p){
+int sqlite3DbMallocSize(sqlite3 *db, const void *p){
   assert( p!=0 );
 #ifdef SQLITE_DEBUG
   if( db==0 || !isLookaside(db,p) ){
@@ -366,7 +365,7 @@ int sqlite3DbMallocSize(sqlite3 *db, void *p){
       }
     }
   }
-  return sqlite3GlobalConfig.m.xSize(p);
+  return sqlite3GlobalConfig.m.xSize((void*)p);
 }
 sqlite3_uint64 sqlite3_msize(void *p){
   assert( sqlite3MemdebugNoType(p, (u8)~MEMTYPE_HEAP) );
@@ -474,12 +473,17 @@ void *sqlite3Realloc(void *pOld, u64 nBytes){
   if( nOld==nNew ){
     pNew = pOld;
   }else if( sqlite3GlobalConfig.bMemstat ){
+    sqlite3_int64 nUsed;
     sqlite3_mutex_enter(mem0.mutex);
     sqlite3StatusHighwater(SQLITE_STATUS_MALLOC_SIZE, (int)nBytes);
     nDiff = nNew - nOld;
-    if( nDiff>0 && sqlite3StatusValue(SQLITE_STATUS_MEMORY_USED) >= 
+    if( nDiff>0 && (nUsed = sqlite3StatusValue(SQLITE_STATUS_MEMORY_USED)) >= 
           mem0.alarmThreshold-nDiff ){
       sqlite3MallocAlarm(nDiff);
+      if( mem0.hardLimit>0 && nUsed >= mem0.hardLimit - nDiff ){
+        sqlite3_mutex_leave(mem0.mutex);
+        return 0;
+      }
     }
     pNew = sqlite3GlobalConfig.m.xRealloc(pOld, nNew);
 #ifdef SQLITE_ENABLE_MEMORY_MANAGEMENT
@@ -786,12 +790,15 @@ void sqlite3OomClear(sqlite3 *db){
 }
 
 /*
-** Take actions at the end of an API call to indicate an OOM error
+** Take actions at the end of an API call to deal with error codes.
 */
-static SQLITE_NOINLINE int apiOomError(sqlite3 *db){
-  sqlite3OomClear(db);
-  sqlite3Error(db, SQLITE_NOMEM);
-  return SQLITE_NOMEM_BKPT;
+static SQLITE_NOINLINE int apiHandleError(sqlite3 *db, int rc){
+  if( db->mallocFailed || rc==SQLITE_IOERR_NOMEM ){
+    sqlite3OomClear(db);
+    sqlite3Error(db, SQLITE_NOMEM);
+    return SQLITE_NOMEM_BKPT;
+  }
+  return rc & db->errMask;
 }
 
 /*
@@ -813,8 +820,8 @@ int sqlite3ApiExit(sqlite3* db, int rc){
   */
   assert( db!=0 );
   assert( sqlite3_mutex_held(db->mutex) );
-  if( db->mallocFailed || rc==SQLITE_IOERR_NOMEM ){
-    return apiOomError(db);
+  if( db->mallocFailed || rc ){
+    return apiHandleError(db, rc);
   }
   return rc & db->errMask;
 }

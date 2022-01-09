@@ -131,6 +131,7 @@ set allquicktests [test_set $alltests -exclude {
   fts3defer.test fts4langid.test fts3sort.test fts5unicode.test
 
   rtree4.test
+  sessionbig.test
 }]
 if {[info exists ::env(QUICKTEST_INCLUDE)]} {
   set allquicktests [concat $allquicktests $::env(QUICKTEST_INCLUDE)]
@@ -989,7 +990,7 @@ test_suite "journaltest" -description {
   pager1.test syscall.test tkt3457.test *malloc* mmap* multiplex* nolock*
   pager2.test *fault* rowal* snapshot* superlock* symlink.test
   delete_db.test shmlock.test chunksize.test
-  busy2.test
+  busy2.test avfs.test external_reader.test
 }]
 
 if {[info commands register_demovfs] != ""} {
@@ -1062,7 +1063,8 @@ test_suite "no_optimization" -description {
     where6.test where7.test where8.test where9.test                  \
     whereA.test whereB.test wherelimit.test                          \
     select1.test select2.test select3.test select4.test select5.test \
-    select7.test select8.test selectA.test selectC.test     
+    select7.test select8.test selectA.test selectC.test              \
+    -exclude windowpushd.test
 ] -dbconfig {
   optimization_control $::dbhandle all 0
 }
@@ -1136,12 +1138,28 @@ proc run_tests {name args} {
   set ::G(perm:dbconfig)     $options(-dbconfig)
   set ::G(perm:presql)       $options(-presql)
 
-  foreach file [lsort $options(-files)] {
-    uplevel $options(-initialize)
+  set filelist [lsort $options(-files)]
+  if {[info exists ::env(TCLTEST_PART)]} {
+    regexp {^([0-9]*)/([0-9]*)$} $::env(TCLTEST_PART) -> A B
+    set nFile [expr {([llength $filelist]+$B-1)/$B}]
+    set filelist [lrange $filelist [expr ($A-1)*$nFile] [expr $A*$nFile-1]]
+  }
+
+  foreach file $filelist {
     if {[file tail $file] == $file} { set file [file join $::testdir $file] }
+
+    if {[info exists ::env(SQLITE_TEST_PATTERN_LIST)]} {
+      set ok 0
+      foreach p $::env(SQLITE_TEST_PATTERN_LIST) {
+        set p [string map {% *} $p]
+        if {[string match $p [file tail $file]]} {set ok 1 ; break}
+      }
+      if {!$ok} continue
+    }
+
+    uplevel $options(-initialize)
     slave_test_file $file
     uplevel $options(-shutdown)
-
     unset -nocomplain ::G(perm:sqlite3_args)
   }
 
@@ -1201,6 +1219,7 @@ if {[file tail $argv0] == "permutations.test"} {
         set S $::testspec($suite)
         set i 1
       } else {
+        set suite default
         set S [list]
         set i 0
       }
@@ -1221,9 +1240,10 @@ if {[file tail $argv0] == "permutations.test"} {
         set extra [list -files $files]
       }
 
-      eval run_tests $suite $S $extra
+      eval [list run_tests $suite] $S $extra
     }
   }
   main $argv
+  set argv {}
   finish_test
 }

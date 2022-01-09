@@ -1,5 +1,6 @@
+%include {
 /*
-** 2001 September 15
+** 2001-09-15
 **
 ** The author disclaims copyright to this source code.  In place of
 ** a legal notice, here is a blessing:
@@ -9,11 +10,16 @@
 **    May you share freely, never taking more than you give.
 **
 *************************************************************************
-** This file contains SQLite's grammar for SQL.  Process this file
-** using the lemon parser generator to generate C code that runs
-** the parser.  Lemon will also generate a header file containing
-** numeric codes for all of the tokens.
+** This file contains SQLite's SQL parser.
+**
+** The canonical source code to this file ("parse.y") is a Lemon grammar 
+** file that specifies the input grammar and actions to take while parsing.
+** That input file is processed by Lemon to generate a C-language 
+** implementation of a parser for the given grammer.  You might be reading
+** this comment as part of the translated C-code.  Edits should be made
+** to the original parse.y sources.
 */
+}
 
 // All token codes are small integers with #defines that begin with "TK_"
 %token_prefix TK_
@@ -187,19 +193,22 @@ ifnotexists(A) ::= .              {A = 0;}
 ifnotexists(A) ::= IF NOT EXISTS. {A = 1;}
 %type temp {int}
 %ifndef SQLITE_OMIT_TEMPDB
-temp(A) ::= TEMP.  {A = 1;}
+temp(A) ::= TEMP.  {A = pParse->db->init.busy==0;}
 %endif  SQLITE_OMIT_TEMPDB
 temp(A) ::= .      {A = 0;}
-create_table_args ::= LP columnlist conslist_opt(X) RP(E) table_options(F). {
+create_table_args ::= LP columnlist conslist_opt(X) RP(E) table_option_set(F). {
   sqlite3EndTable(pParse,&X,&E,F,0);
 }
 create_table_args ::= AS select(S). {
   sqlite3EndTable(pParse,0,0,0,S);
   sqlite3SelectDelete(pParse->db, S);
 }
-%type table_options {int}
-table_options(A) ::= .    {A = 0;}
-table_options(A) ::= WITHOUT nm(X). {
+%type table_option_set {u32}
+%type table_option {u32}
+table_option_set(A) ::= .    {A = 0;}
+table_option_set(A) ::= table_option(A).
+table_option_set(A) ::= table_option_set(X) COMMA table_option(Y). {A = X|Y;}
+table_option(A) ::= WITHOUT nm(X). {
   if( X.n==5 && sqlite3_strnicmp(X.z,"rowid",5)==0 ){
     A = TF_WithoutRowid | TF_NoVisibleRowid;
   }else{
@@ -207,9 +216,17 @@ table_options(A) ::= WITHOUT nm(X). {
     sqlite3ErrorMsg(pParse, "unknown table option: %.*s", X.n, X.z);
   }
 }
+table_option(A) ::= nm(X). {
+  if( X.n==6 && sqlite3_strnicmp(X.z,"strict",6)==0 ){
+    A = TF_Strict;
+  }else{
+    A = 0;
+    sqlite3ErrorMsg(pParse, "unknown table option: %.*s", X.n, X.z);
+  }
+}
 columnlist ::= columnlist COMMA columnname carglist.
 columnlist ::= columnname carglist.
-columnname(A) ::= nm(A) typetoken(Y). {sqlite3AddColumn(pParse,&A,&Y);}
+columnname(A) ::= nm(A) typetoken(Y). {sqlite3AddColumn(pParse,A,Y);}
 
 // Declare some tokens early in order to influence their values, to 
 // improve performance and reduce the executable size.  The goal here is
@@ -244,6 +261,7 @@ columnname(A) ::= nm(A) typetoken(Y). {sqlite3AddColumn(pParse,&A,&Y);}
 %ifndef SQLITE_OMIT_GENERATED_COLUMNS
   GENERATED ALWAYS
 %endif
+  MATERIALIZED
   REINDEX RENAME CTIME_KW IF
   .
 %wildcard ANY.
@@ -366,7 +384,7 @@ ccons ::= PRIMARY KEY sortorder(Z) onconf(R) autoinc(I).
                                  {sqlite3AddPrimaryKey(pParse,0,R,I,Z);}
 ccons ::= UNIQUE onconf(R).      {sqlite3CreateIndex(pParse,0,0,0,0,R,0,0,0,0,
                                    SQLITE_IDXTYPE_UNIQUE);}
-ccons ::= CHECK LP expr(X) RP.   {sqlite3AddCheckConstraint(pParse,X);}
+ccons ::= CHECK LP(A) expr(X) RP(B).  {sqlite3AddCheckConstraint(pParse,X,A.z,B.z);}
 ccons ::= REFERENCES nm(T) eidlist_opt(TA) refargs(R).
                                  {sqlite3CreateForeignKey(pParse,0,&T,TA,R);}
 ccons ::= defer_subclause(D).    {sqlite3DeferForeignKey(pParse,D);}
@@ -420,8 +438,8 @@ tcons ::= PRIMARY KEY LP sortlist(X) autoinc(I) RP onconf(R).
 tcons ::= UNIQUE LP sortlist(X) RP onconf(R).
                                  {sqlite3CreateIndex(pParse,0,0,0,X,R,0,0,0,0,
                                        SQLITE_IDXTYPE_UNIQUE);}
-tcons ::= CHECK LP expr(E) RP onconf.
-                                 {sqlite3AddCheckConstraint(pParse,E);}
+tcons ::= CHECK LP(A) expr(E) RP(B) onconf.
+                                 {sqlite3AddCheckConstraint(pParse,E,A.z,B.z);}
 tcons ::= FOREIGN KEY LP eidlist(FA) RP
           REFERENCES nm(T) eidlist_opt(TA) refargs(R) defer_subclause_opt(D). {
     sqlite3CreateForeignKey(pParse, FA, &T, TA, R);
@@ -490,11 +508,21 @@ cmd ::= select(X).  {
   static void parserDoubleLinkSelect(Parse *pParse, Select *p){
     assert( p!=0 );
     if( p->pPrior ){
-      Select *pNext = 0, *pLoop;
-      int mxSelect, cnt = 0;
-      for(pLoop=p; pLoop; pNext=pLoop, pLoop=pLoop->pPrior, cnt++){
+      Select *pNext = 0, *pLoop = p;
+      int mxSelect, cnt = 1;
+      while(1){
         pLoop->pNext = pNext;
         pLoop->selFlags |= SF_Compound;
+        pNext = pLoop;
+        pLoop = pLoop->pPrior;
+        if( pLoop==0 ) break;
+        cnt++;        
+        if( pLoop->pOrderBy || pLoop->pLimit ){
+          sqlite3ErrorMsg(pParse,"%s clause should come after %s not before",
+             pLoop->pOrderBy!=0 ? "ORDER BY" : "LIMIT",
+             sqlite3SelectOpName(pNext->op));
+          break;
+        }
       }
       if( (p->selFlags & SF_MultiValue)==0 && 
         (mxSelect = pParse->db->aLimit[SQLITE_LIMIT_COMPOUND_SELECT])>0 &&
@@ -504,29 +532,25 @@ cmd ::= select(X).  {
       }
     }
   }
+
+  /* Attach a With object describing the WITH clause to a Select
+  ** object describing the query for which the WITH clause is a prefix.
+  */
+  static Select *attachWithToSelect(Parse *pParse, Select *pSelect, With *pWith){
+    if( pSelect ){
+      pSelect->pWith = pWith;
+      parserDoubleLinkSelect(pParse, pSelect);
+    }else{
+      sqlite3WithDelete(pParse->db, pWith);
+    }
+    return pSelect;
+  }
 }
 
 %ifndef SQLITE_OMIT_CTE
-select(A) ::= WITH wqlist(W) selectnowith(X). {
-  Select *p = X;
-  if( p ){
-    p->pWith = W;
-    parserDoubleLinkSelect(pParse, p);
-  }else{
-    sqlite3WithDelete(pParse->db, W);
-  }
-  A = p;
-}
-select(A) ::= WITH RECURSIVE wqlist(W) selectnowith(X). {
-  Select *p = X;
-  if( p ){
-    p->pWith = W;
-    parserDoubleLinkSelect(pParse, p);
-  }else{
-    sqlite3WithDelete(pParse->db, W);
-  }
-  A = p;
-}
+select(A) ::= WITH wqlist(W) selectnowith(X). {A = attachWithToSelect(pParse,X,W);}
+select(A) ::= WITH RECURSIVE wqlist(W) selectnowith(X).
+                                              {A = attachWithToSelect(pParse,X,W);}
 %endif /* SQLITE_OMIT_CTE */
 select(A) ::= selectnowith(X). {
   Select *p = X;
@@ -693,8 +717,8 @@ seltablist(A) ::= stl_prefix(A) nm(Y) dbnm(D) LP exprlist(E) RP as(Z)
     }else if( F->nSrc==1 ){
       A = sqlite3SrcListAppendFromTerm(pParse,A,0,0,&Z,0,N,U);
       if( A ){
-        struct SrcList_item *pNew = &A->a[A->nSrc-1];
-        struct SrcList_item *pOld = F->a;
+        SrcItem *pNew = &A->a[A->nSrc-1];
+        SrcItem *pOld = F->a;
         pNew->zName = pOld->zName;
         pNew->zDatabase = pOld->zDatabase;
         pNew->pSelect = pOld->pSelect;
@@ -862,7 +886,7 @@ limit_opt(A) ::= LIMIT expr(X) COMMA expr(Y).
 /////////////////////////// The DELETE statement /////////////////////////////
 //
 %if SQLITE_ENABLE_UPDATE_DELETE_LIMIT || SQLITE_UDL_CAPABLE_PARSER
-cmd ::= with DELETE FROM xfullname(X) indexed_opt(I) where_opt(W) 
+cmd ::= with DELETE FROM xfullname(X) indexed_opt(I) where_opt_ret(W)
         orderby_opt(O) limit_opt(L). {
   sqlite3SrcListIndexedBy(pParse, X, &I);
 #ifndef SQLITE_ENABLE_UPDATE_DELETE_LIMIT
@@ -875,7 +899,7 @@ cmd ::= with DELETE FROM xfullname(X) indexed_opt(I) where_opt(W)
   sqlite3DeleteFrom(pParse,X,W,O,L);
 }
 %else
-cmd ::= with DELETE FROM xfullname(X) indexed_opt(I) where_opt(W). {
+cmd ::= with DELETE FROM xfullname(X) indexed_opt(I) where_opt_ret(W). {
   sqlite3SrcListIndexedBy(pParse, X, &I);
   sqlite3DeleteFrom(pParse,X,W,0,0);
 }
@@ -883,15 +907,23 @@ cmd ::= with DELETE FROM xfullname(X) indexed_opt(I) where_opt(W). {
 
 %type where_opt {Expr*}
 %destructor where_opt {sqlite3ExprDelete(pParse->db, $$);}
+%type where_opt_ret {Expr*}
+%destructor where_opt_ret {sqlite3ExprDelete(pParse->db, $$);}
 
 where_opt(A) ::= .                    {A = 0;}
 where_opt(A) ::= WHERE expr(X).       {A = X;}
+where_opt_ret(A) ::= .                                      {A = 0;}
+where_opt_ret(A) ::= WHERE expr(X).                         {A = X;}
+where_opt_ret(A) ::= RETURNING selcollist(X).               
+       {sqlite3AddReturning(pParse,X); A = 0;}
+where_opt_ret(A) ::= WHERE expr(X) RETURNING selcollist(Y).
+       {sqlite3AddReturning(pParse,Y); A = X;}
 
 ////////////////////////// The UPDATE command ////////////////////////////////
 //
 %if SQLITE_ENABLE_UPDATE_DELETE_LIMIT || SQLITE_UDL_CAPABLE_PARSER
 cmd ::= with UPDATE orconf(R) xfullname(X) indexed_opt(I) SET setlist(Y) from(F)
-        where_opt(W) orderby_opt(O) limit_opt(L).  {
+        where_opt_ret(W) orderby_opt(O) limit_opt(L).  {
   sqlite3SrcListIndexedBy(pParse, X, &I);
   X = sqlite3SrcListAppendList(pParse, X, F);
   sqlite3ExprListCheckLength(pParse,Y,"set list"); 
@@ -906,7 +938,7 @@ cmd ::= with UPDATE orconf(R) xfullname(X) indexed_opt(I) SET setlist(Y) from(F)
 }
 %else
 cmd ::= with UPDATE orconf(R) xfullname(X) indexed_opt(I) SET setlist(Y) from(F)
-        where_opt(W). {
+        where_opt_ret(W). {
   sqlite3SrcListIndexedBy(pParse, X, &I);
   sqlite3ExprListCheckLength(pParse,Y,"set list"); 
   X = sqlite3SrcListAppendList(pParse, X, F);
@@ -940,7 +972,7 @@ cmd ::= with insert_cmd(R) INTO xfullname(X) idlist_opt(F) select(S)
         upsert(U). {
   sqlite3Insert(pParse, X, S, F, R, U);
 }
-cmd ::= with insert_cmd(R) INTO xfullname(X) idlist_opt(F) DEFAULT VALUES.
+cmd ::= with insert_cmd(R) INTO xfullname(X) idlist_opt(F) DEFAULT VALUES returning.
 {
   sqlite3Insert(pParse, X, 0, F, R, 0);
 }
@@ -953,13 +985,19 @@ cmd ::= with insert_cmd(R) INTO xfullname(X) idlist_opt(F) DEFAULT VALUES.
 // avoid unreachable code.
 //%destructor upsert {sqlite3UpsertDelete(pParse->db,$$);}
 upsert(A) ::= . { A = 0; }
+upsert(A) ::= RETURNING selcollist(X).  { A = 0; sqlite3AddReturning(pParse,X); }
 upsert(A) ::= ON CONFLICT LP sortlist(T) RP where_opt(TW)
-              DO UPDATE SET setlist(Z) where_opt(W).
-              { A = sqlite3UpsertNew(pParse->db,T,TW,Z,W);}
-upsert(A) ::= ON CONFLICT LP sortlist(T) RP where_opt(TW) DO NOTHING.
-              { A = sqlite3UpsertNew(pParse->db,T,TW,0,0); }
-upsert(A) ::= ON CONFLICT DO NOTHING.
-              { A = sqlite3UpsertNew(pParse->db,0,0,0,0); }
+              DO UPDATE SET setlist(Z) where_opt(W) upsert(N).
+              { A = sqlite3UpsertNew(pParse->db,T,TW,Z,W,N);}
+upsert(A) ::= ON CONFLICT LP sortlist(T) RP where_opt(TW) DO NOTHING upsert(N).
+              { A = sqlite3UpsertNew(pParse->db,T,TW,0,0,N); }
+upsert(A) ::= ON CONFLICT DO NOTHING returning.
+              { A = sqlite3UpsertNew(pParse->db,0,0,0,0,0); }
+upsert(A) ::= ON CONFLICT DO UPDATE SET setlist(Z) where_opt(W) returning.
+              { A = sqlite3UpsertNew(pParse->db,0,0,Z,W,0);}
+
+returning ::= RETURNING selcollist(X).  {sqlite3AddReturning(pParse,X);}
+returning ::= .
 
 %type insert_cmd {int}
 insert_cmd(A) ::= INSERT orconf(R).   {A = R;}
@@ -1001,9 +1039,9 @@ idlist(A) ::= nm(Y).
       ExprClearVVAProperties(p);
       p->iAgg = -1;
       p->pLeft = p->pRight = 0;
-      p->x.pList = 0;
       p->pAggInfo = 0;
-      p->y.pTab = 0;
+      memset(&p->x, 0, sizeof(p->x));
+      memset(&p->y, 0, sizeof(p->y));
       p->op2 = 0;
       p->iTable = 0;
       p->iColumn = 0;
@@ -1227,20 +1265,28 @@ expr(A) ::= expr(A) between_op(N) expr(X) AND expr(Y). [BETWEEN] {
       */
       sqlite3ExprUnmapAndDelete(pParse, A);
       A = sqlite3Expr(pParse->db, TK_INTEGER, N ? "1" : "0");
-    }else if( Y->nExpr==1 && sqlite3ExprIsConstant(Y->a[0].pExpr) ){
-      Expr *pRHS = Y->a[0].pExpr;
-      Y->a[0].pExpr = 0;
-      sqlite3ExprListDelete(pParse->db, Y);
-      pRHS = sqlite3PExpr(pParse, TK_UPLUS, pRHS, 0);
-      A = sqlite3PExpr(pParse, TK_EQ, A, pRHS);
-      if( N ) A = sqlite3PExpr(pParse, TK_NOT, A, 0);
     }else{
-      A = sqlite3PExpr(pParse, TK_IN, A, 0);
-      if( A ){
-        A->x.pList = Y;
-        sqlite3ExprSetHeightAndFlags(pParse, A);
-      }else{
+      Expr *pRHS = Y->a[0].pExpr;
+      if( Y->nExpr==1 && sqlite3ExprIsConstant(pRHS) && A->op!=TK_VECTOR ){
+        Y->a[0].pExpr = 0;
         sqlite3ExprListDelete(pParse->db, Y);
+        pRHS = sqlite3PExpr(pParse, TK_UPLUS, pRHS, 0);
+        A = sqlite3PExpr(pParse, TK_EQ, A, pRHS);
+      }else{
+        A = sqlite3PExpr(pParse, TK_IN, A, 0);
+        if( A==0 ){
+          sqlite3ExprListDelete(pParse->db, Y);
+        }else if( A->pLeft->op==TK_VECTOR ){
+          int nExpr = A->pLeft->x.pList->nExpr;
+          Select *pSelectRHS = sqlite3ExprListToValues(pParse, nExpr, Y);
+          if( pSelectRHS ){
+            parserDoubleLinkSelect(pParse, pSelectRHS);
+            sqlite3PExprAddSelect(pParse, A, pSelectRHS);
+          }
+        }else{
+          A->x.pList = Y;
+          sqlite3ExprSetHeightAndFlags(pParse, A);
+        }
       }
       if( N ) A = sqlite3PExpr(pParse, TK_NOT, A, 0);
     }
@@ -1592,7 +1638,8 @@ cmd ::= ANALYZE nm(X) dbnm(Y).  {sqlite3Analyze(pParse, &X, &Y);}
 %endif
 
 //////////////////////// ALTER TABLE table ... ////////////////////////////////
-%ifndef SQLITE_OMIT_ALTERTABLE
+%ifndef SQLITE_OMIT_ALTERTABLE 
+%ifndef SQLITE_OMIT_VIRTUALTABLE
 cmd ::= ALTER TABLE fullname(X) RENAME TO nm(Z). {
   sqlite3AlterRenameTable(pParse,X,&Z);
 }
@@ -1601,6 +1648,10 @@ cmd ::= ALTER TABLE add_column_fullname
   Y.n = (int)(pParse->sLastToken.z-Y.z) + pParse->sLastToken.n;
   sqlite3AlterFinishAddColumn(pParse, &Y);
 }
+cmd ::= ALTER TABLE fullname(X) DROP kwcolumn_opt nm(Y). {
+  sqlite3AlterDropColumn(pParse, X, &Y);
+}
+
 add_column_fullname ::= fullname(X). {
   disableLookaside(pParse);
   sqlite3AlterBeginAddColumn(pParse, X);
@@ -1612,7 +1663,8 @@ cmd ::= ALTER TABLE fullname(X) RENAME kwcolumn_opt nm(Y) TO nm(Z). {
 kwcolumn_opt ::= .
 kwcolumn_opt ::= COLUMNKW.
 
-%endif  SQLITE_OMIT_ALTERTABLE
+%endif SQLITE_OMIT_VIRTUALTABLE
+%endif SQLITE_OMIT_ALTERTABLE
 
 //////////////////////// CREATE VIRTUAL TABLE ... /////////////////////////////
 %ifndef SQLITE_OMIT_VIRTUALTABLE
@@ -1638,17 +1690,26 @@ anylist ::= anylist ANY.
 //////////////////////// COMMON TABLE EXPRESSIONS ////////////////////////////
 %type wqlist {With*}
 %destructor wqlist {sqlite3WithDelete(pParse->db, $$);}
+%type wqitem {Cte*}
+// %destructor wqitem {sqlite3CteDelete(pParse->db, $$);} // not reachable
 
 with ::= .
 %ifndef SQLITE_OMIT_CTE
 with ::= WITH wqlist(W).              { sqlite3WithPush(pParse, W, 1); }
 with ::= WITH RECURSIVE wqlist(W).    { sqlite3WithPush(pParse, W, 1); }
 
-wqlist(A) ::= nm(X) eidlist_opt(Y) AS LP select(Z) RP. {
-  A = sqlite3WithAdd(pParse, 0, &X, Y, Z); /*A-overwrites-X*/
+%type wqas {u8}
+wqas(A)   ::= AS.                  {A = M10d_Any;}
+wqas(A)   ::= AS MATERIALIZED.     {A = M10d_Yes;}
+wqas(A)   ::= AS NOT MATERIALIZED. {A = M10d_No;}
+wqitem(A) ::= nm(X) eidlist_opt(Y) wqas(M) LP select(Z) RP. {
+  A = sqlite3CteNew(pParse, &X, Y, Z, M); /*A-overwrites-X*/
 }
-wqlist(A) ::= wqlist(A) COMMA nm(X) eidlist_opt(Y) AS LP select(Z) RP. {
-  A = sqlite3WithAdd(pParse, A, &X, Y, Z);
+wqlist(A) ::= wqitem(X). {
+  A = sqlite3WithAdd(pParse, 0, X); /*A-overwrites-X*/
+}
+wqlist(A) ::= wqlist(A) COMMA wqitem(X). {
+  A = sqlite3WithAdd(pParse, A, X);
 }
 %endif  SQLITE_OMIT_CTE
 
@@ -1761,7 +1822,11 @@ frame_exclude(A) ::= GROUP|TIES(X).  {A = @X; /*A-overwrites-X*/}
 window_clause(A) ::= WINDOW windowdefn_list(B). { A = B; }
 
 filter_over(A) ::= filter_clause(F) over_clause(O). {
-  O->pFilter = F;
+  if( O ){
+    O->pFilter = F;
+  }else{
+    sqlite3ExprDelete(pParse->db, F);
+  }
   A = O;
 }
 filter_over(A) ::= over_clause(O). {
@@ -1811,6 +1876,7 @@ filter_clause(A) ::= FILTER LP WHERE expr(X) RP.  { A = X; }
   IF_NULL_ROW     /* the if-null-row operator */
   ASTERISK        /* The "*" in count(*) and similar */
   SPAN            /* The span operator */
+  ERROR           /* An expression containing an error */
 .
 /* There must be no more than 255 tokens defined above.  If this grammar
 ** is extended with new rules and tokens, they must either be so few in

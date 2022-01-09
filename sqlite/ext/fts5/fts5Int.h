@@ -35,8 +35,20 @@ typedef sqlite3_uint64 u64;
 #endif
 
 #define testcase(x)
-#define ALWAYS(x) 1
-#define NEVER(x) 0
+
+#if defined(SQLITE_COVERAGE_TEST) || defined(SQLITE_MUTATION_TEST)
+# define SQLITE_OMIT_AUXILIARY_SAFETY_CHECKS 1
+#endif
+#if defined(SQLITE_OMIT_AUXILIARY_SAFETY_CHECKS)
+# define ALWAYS(X)      (1)
+# define NEVER(X)       (0)
+#elif !defined(NDEBUG)
+# define ALWAYS(X)      ((X)?1:(assert(0),0))
+# define NEVER(X)       ((X)?(assert(0),1):0)
+#else
+# define ALWAYS(X)      (X)
+# define NEVER(X)       (X)
+#endif
 
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 #define MAX(x,y) (((x) > (y)) ? (x) : (y))
@@ -96,7 +108,7 @@ extern int sqlite3_fts5_may_be_corrupt;
 ** A version of memcmp() that does not cause asan errors if one of the pointer
 ** parameters is NULL and the number of bytes to compare is zero.
 */
-#define fts5Memcmp(s1, s2, n) ((n)==0 ? 0 : memcmp((s1), (s2), (n)))
+#define fts5Memcmp(s1, s2, n) ((n)<=0 ? 0 : memcmp((s1), (s2), (n)))
 
 /* Mark a function parameter as unused, to suppress nuisance compiler
 ** warnings. */
@@ -184,6 +196,7 @@ struct Fts5Config {
   Fts5Tokenizer *pTok;
   fts5_tokenizer *pTokApi;
   int bLock;                      /* True when table is preparing statement */
+  int ePattern;                   /* FTS_PATTERN_XXX constant */
 
   /* Values loaded from the %_config table */
   int iCookie;                    /* Incremented when %_config is modified */
@@ -204,17 +217,19 @@ struct Fts5Config {
 };
 
 /* Current expected value of %_config table 'version' field */
-#define FTS5_CURRENT_VERSION 4
+#define FTS5_CURRENT_VERSION  4
 
 #define FTS5_CONTENT_NORMAL   0
 #define FTS5_CONTENT_NONE     1
 #define FTS5_CONTENT_EXTERNAL 2
 
-#define FTS5_DETAIL_FULL    0
-#define FTS5_DETAIL_NONE    1
-#define FTS5_DETAIL_COLUMNS 2
+#define FTS5_DETAIL_FULL      0
+#define FTS5_DETAIL_NONE      1
+#define FTS5_DETAIL_COLUMNS   2
 
-
+#define FTS5_PATTERN_NONE     0
+#define FTS5_PATTERN_LIKE     65  /* matches SQLITE_INDEX_CONSTRAINT_LIKE */
+#define FTS5_PATTERN_GLOB     66  /* matches SQLITE_INDEX_CONSTRAINT_GLOB */
 
 int sqlite3Fts5ConfigParse(
     Fts5Global*, sqlite3*, int, const char **, Fts5Config**, char**
@@ -432,6 +447,9 @@ void sqlite3Fts5IndexCloseReader(Fts5Index*);
 */
 const char *sqlite3Fts5IterTerm(Fts5IndexIter*, int*);
 int sqlite3Fts5IterNextScan(Fts5IndexIter*);
+void *sqlite3Fts5StructureRef(Fts5Index*);
+void sqlite3Fts5StructureRelease(void*);
+int sqlite3Fts5StructureTest(Fts5Index*, void*);
 
 
 /*
@@ -484,7 +502,7 @@ int sqlite3Fts5IndexSetAverages(Fts5Index *p, const u8*, int);
 /*
 ** Functions called by the storage module as part of integrity-check.
 */
-int sqlite3Fts5IndexIntegrityCheck(Fts5Index*, u64 cksum);
+int sqlite3Fts5IndexIntegrityCheck(Fts5Index*, u64 cksum, int bUseCksum);
 
 /* 
 ** Called during virtual module initialization to register UDF 
@@ -554,8 +572,7 @@ int sqlite3Fts5GetTokenizer(
   Fts5Global*, 
   const char **azArg,
   int nArg,
-  Fts5Tokenizer**,
-  fts5_tokenizer**,
+  Fts5Config*,
   char **pzErr
 );
 
@@ -639,7 +656,7 @@ int sqlite3Fts5StorageDelete(Fts5Storage *p, i64, sqlite3_value**);
 int sqlite3Fts5StorageContentInsert(Fts5Storage *p, sqlite3_value**, i64*);
 int sqlite3Fts5StorageIndexInsert(Fts5Storage *p, sqlite3_value**, i64);
 
-int sqlite3Fts5StorageIntegrity(Fts5Storage *p);
+int sqlite3Fts5StorageIntegrity(Fts5Storage *p, int iArg);
 
 int sqlite3Fts5StorageStmt(Fts5Storage *p, int eStmt, sqlite3_stmt**, char**);
 void sqlite3Fts5StorageStmtRelease(Fts5Storage *p, int eStmt, sqlite3_stmt*);
@@ -684,10 +701,18 @@ struct Fts5Token {
 /* Parse a MATCH expression. */
 int sqlite3Fts5ExprNew(
   Fts5Config *pConfig, 
+  int bPhraseToAnd,
   int iCol,                       /* Column on LHS of MATCH operator */
   const char *zExpr,
   Fts5Expr **ppNew, 
   char **pzErr
+);
+int sqlite3Fts5ExprPattern(
+  Fts5Config *pConfig, 
+  int bGlob, 
+  int iCol, 
+  const char *zText, 
+  Fts5Expr **pp
 );
 
 /*
@@ -797,6 +822,10 @@ int sqlite3Fts5AuxInit(fts5_api*);
 */
 
 int sqlite3Fts5TokenizerInit(fts5_api*);
+int sqlite3Fts5TokenizerPattern(
+    int (*xCreate)(void*, const char**, int, Fts5Tokenizer**),
+    Fts5Tokenizer *pTok
+);
 /*
 ** End of interface to code in fts5_tokenizer.c.
 **************************************************************************/
