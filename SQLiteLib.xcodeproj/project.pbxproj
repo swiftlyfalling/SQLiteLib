@@ -170,6 +170,7 @@
 			);
 			name = "Copy .example configuration, if no USER configuration present";
 			outputPaths = (
+				"$(SRCROOT)/SQLiteLib-USER.xcconfig",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
