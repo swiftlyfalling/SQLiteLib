@@ -291,7 +291,8 @@ proc copy_file {filename} {
           # Add the SQLITE_PRIVATE before variable declarations or
           # definitions for internal use
           regsub {^SQLITE_API } $line {} line
-          if {![regexp {^sqlite3_} $varname]} {
+          if {![regexp {^sqlite3_} $varname]
+              && ![regexp {^sqlite3Show[A-Z]} $varname]} {
             regsub {^extern } $line {} line
             puts $out "SQLITE_PRIVATE $line"
           } else {
@@ -429,7 +430,7 @@ foreach file {
    fts3_unicode.c
    fts3_unicode2.c
 
-   json1.c
+   json.c
    rtree.c
    icu.c
    fts3_icu.c

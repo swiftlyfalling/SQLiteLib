@@ -296,7 +296,7 @@ struct Fts5Index {
   sqlite3_stmt *pWriter;          /* "INSERT ... %_data VALUES(?,?)" */
   sqlite3_stmt *pDeleter;         /* "DELETE FROM %_data ... id>=? AND id<=?" */
   sqlite3_stmt *pIdxWriter;       /* "INSERT ... %_idx VALUES(?,?,?,?)" */
-  sqlite3_stmt *pIdxDeleter;      /* "DELETE FROM %_idx WHERE segid=? */
+  sqlite3_stmt *pIdxDeleter;      /* "DELETE FROM %_idx WHERE segid=?" */
   sqlite3_stmt *pIdxSelect;
   int nRead;                      /* Total number of blocks read */
 
@@ -5565,7 +5565,7 @@ int sqlite3Fts5IndexQuery(
   if( sqlite3Fts5BufferSize(&p->rc, &buf, nToken+1)==0 ){
     int iIdx = 0;                 /* Index to search */
     int iPrefixIdx = 0;           /* +1 prefix index */
-    if( nToken ) memcpy(&buf.p[1], pToken, nToken);
+    if( nToken>0 ) memcpy(&buf.p[1], pToken, nToken);
 
     /* Figure out which index to search and set iIdx accordingly. If this
     ** is a prefix query for which there is no prefix index, set iIdx to
