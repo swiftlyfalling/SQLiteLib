@@ -61,7 +61,7 @@ Trigger *sqlite3TriggerList(Parse *pParse, Table *pTab){
     if( pTrig->pTabSchema==pTab->pSchema
      && pTrig->table
      && 0==sqlite3StrICmp(pTrig->table, pTab->zName)
-     && pTrig->pTabSchema!=pTmpSchema
+     && (pTrig->pTabSchema!=pTmpSchema || pTrig->bReturning)
     ){
       pTrig->pNext = pList;
       pList = pTrig;
@@ -202,6 +202,7 @@ void sqlite3BeginTrigger(
       }else{
         assert( !db->init.busy );
         sqlite3CodeVerifySchema(pParse, iDb);
+        VVA_ONLY( pParse->ifNotExists = 1; )
       }
       goto trigger_cleanup;
     }
@@ -350,6 +351,23 @@ void sqlite3FinishTrigger(
   if( !db->init.busy ){
     Vdbe *v;
     char *z;
+
+    /* If this is a new CREATE TABLE statement, and if shadow tables
+    ** are read-only, and the trigger makes a change to a shadow table,
+    ** then raise an error - do not allow the trigger to be created. */
+    if( sqlite3ReadOnlyShadowTables(db) ){
+      TriggerStep *pStep;
+      for(pStep=pTrig->step_list; pStep; pStep=pStep->pNext){
+        if( pStep->zTarget!=0
+         && sqlite3ShadowTableName(db, pStep->zTarget)
+        ){
+          sqlite3ErrorMsg(pParse, 
+            "trigger \"%s\" may not write to shadow table \"%s\"",
+            pTrig->zName, pStep->zTarget);
+          goto triggerfinish_cleanup;
+        }
+      }
+    }
 
     /* Make an entry in the sqlite_schema table */
     v = sqlite3GetVdbe(pParse);
@@ -966,7 +984,7 @@ static void codeReturningTrigger(
   }
   sqlite3ExprListDelete(db, sSelect.pEList);
   pNew = sqlite3ExpandReturning(pParse, pReturning->pReturnEL, pTab);
-  if( !db->mallocFailed ){
+  if( pParse->nErr==0 ){
     NameContext sNC;
     memset(&sNC, 0, sizeof(sNC));
     if( pReturning->nRetCol==0 ){
@@ -1174,7 +1192,7 @@ static TriggerPrg *codeRowTrigger(
   sSubParse.zAuthContext = pTrigger->zName;
   sSubParse.eTriggerOp = pTrigger->op;
   sSubParse.nQueryLoop = pParse->nQueryLoop;
-  sSubParse.disableVtab = pParse->disableVtab;
+  sSubParse.prepFlags = pParse->prepFlags;
 
   v = sqlite3GetVdbe(&sSubParse);
   if( v ){
@@ -1435,6 +1453,9 @@ u32 sqlite3TriggerColmask(
   Trigger *p;
 
   assert( isNew==1 || isNew==0 );
+  if( IsView(pTab) ){
+    return 0xffffffff;
+  }
   for(p=pTrigger; p; p=p->pNext){
     if( p->op==op
      && (tr_tm&p->tr_tm)
