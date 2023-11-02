@@ -180,7 +180,7 @@
 **    0x81 0x00                 becomes  0x00000080
 **    0x82 0x00                 becomes  0x00000100
 **    0x80 0x7f                 becomes  0x0000007f
-**    0x8a 0x91 0xd1 0xac 0x78  becomes  0x12345678
+**    0x81 0x91 0xd1 0xac 0x78  becomes  0x12345678
 **    0x81 0x81 0x81 0x81 0x01  becomes  0x10204081
 **
 ** Variable length integers are used for rowids and to hold the number of
@@ -263,7 +263,7 @@ typedef struct CellInfo CellInfo;
 ** page that has been loaded into memory.  The information in this object
 ** is derived from the raw on-disk page content.
 **
-** As each database page is loaded into memory, the pager allocats an
+** As each database page is loaded into memory, the pager allocates an
 ** instance of this object and zeros the first 8 bytes.  (This is the
 ** "extra" information associated with each page of the pager.)
 **
@@ -695,7 +695,7 @@ struct IntegrityCk {
   BtShared *pBt;    /* The tree being checked out */
   Pager *pPager;    /* The associated pager.  Also accessible by pBt->pPager */
   u8 *aPgRef;       /* 1 bit per page in the db (see above) */
-  Pgno nPage;       /* Number of pages in the database */
+  Pgno nCkPage;     /* Pages in the database.  0 for partial check */
   int mxErr;        /* Stop accumulating errors when this reaches zero */
   int nErr;         /* Number of messages written to zErrMsg so far */
   int rc;           /* SQLITE_OK, SQLITE_NOMEM, or SQLITE_INTERRUPT */
@@ -719,7 +719,7 @@ struct IntegrityCk {
 
 /*
 ** get2byteAligned(), unlike get2byte(), requires that its argument point to a
-** two-byte aligned address.  get2bytea() is only used for accessing the
+** two-byte aligned address.  get2byteAligned() is only used for accessing the
 ** cell addresses in a btree header.
 */
 #if SQLITE_BYTEORDER==4321
