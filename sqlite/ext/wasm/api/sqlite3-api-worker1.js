@@ -1,3 +1,4 @@
+//#ifnot omit-oo1
 /**
   2022-07-22
 
@@ -62,7 +63,7 @@
 
   ```
   {
-    type: string, // one of: 'open', 'close', 'exec', 'config-get'
+    type: string, // one of: 'open', 'close', 'exec', 'export', 'config-get'
 
     messageId: OPTIONAL arbitrary value. The worker will copy it as-is
     into response messages to assist in client-side dispatching.
@@ -325,8 +326,40 @@
   passed only a string), noting that options.resultRows and
   options.columnNames may be populated by the call to db.exec().
 
+
+  ====================================================================
+  "export" the current db
+
+  To export the underlying database as a byte array...
+
+  Message format:
+
+  ```
+  {
+    type: "export",
+    messageId: ...as above...,
+    dbId: ...as above...
+  }
+  ```
+
+  Response:
+
+  ```
+  {
+    type: "export",
+    messageId: ...as above...,
+    dbId: ...as above...
+    result: {
+      byteArray: Uint8Array (as per sqlite3_js_db_export()),
+      filename: the db filename,
+      mimetype: "application/x-sqlite3"
+    }
+  }
+  ```
+
 */
 globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
+const util = sqlite3.util;
 sqlite3.initWorker1API = function(){
   'use strict';
   const toss = (...args)=>{throw new Error(args.join(' '))};
@@ -377,12 +410,12 @@ sqlite3.initWorker1API = function(){
       if(db){
         delete this.dbs[getDbId(db)];
         const filename = db.filename;
-        const pVfs = sqlite3.wasm.sqlite3_wasm_db_vfs(db.pointer, 0);
+        const pVfs = util.sqlite3__wasm_db_vfs(db.pointer, 0);
         db.close();
         const ddNdx = this.dbList.indexOf(db);
         if(ddNdx>=0) this.dbList.splice(ddNdx, 1);
         if(alsoUnlink && filename && pVfs){
-          sqlite3.wasm.sqlite3_wasm_vfs_unlink(pVfs, filename);
+          util.sqlite3__wasm_vfs_unlink(pVfs, filename);
         }
       }
     },
@@ -426,11 +459,6 @@ sqlite3.initWorker1API = function(){
     return wState.dbList[0] && getDbId(wState.dbList[0]);
   };
 
-  const guessVfs = function(filename){
-    const m = /^file:.+(vfs=(\w+))/.exec(filename);
-    return sqlite3.capi.sqlite3_vfs_find(m ? m[2] : 0);
-  };
-
   const isSpecialDbFilename = (n)=>{
     return ""===n || ':'===n[0];
   };
@@ -452,36 +480,8 @@ sqlite3.initWorker1API = function(){
         toss("Throwing because of simulateError flag.");
       }
       const rc = Object.create(null);
-      let byteArray, pVfs;
       oargs.vfs = args.vfs;
-      if(isSpecialDbFilename(args.filename)){
-        oargs.filename = args.filename || "";
-      }else{
-        oargs.filename = args.filename;
-        byteArray = args.byteArray;
-        if(byteArray) pVfs = guessVfs(args.filename);
-      }
-      if(pVfs){
-        /* 2022-11-02: this feature is as-yet untested except that
-           sqlite3_wasm_vfs_create_file() has been tested from the
-           browser dev console. */
-        let pMem;
-        try{
-          pMem = sqlite3.wasm.allocFromTypedArray(byteArray);
-          const rc = sqlite3.wasm.sqlite3_wasm_vfs_create_file(
-            pVfs, oargs.filename, pMem, byteArray.byteLength
-          );
-          if(rc) sqlite3.SQLite3Error.toss(rc);
-        }catch(e){
-          throw new sqlite3.SQLite3Error(
-            e.name+' creating '+args.filename+": "+e.message, {
-              cause: e
-            }
-          );
-        }finally{
-          if(pMem) sqlite3.wasm.dealloc(pMem);
-        }
-      }
+      oargs.filename = args.filename || "";
       const db = wState.open(oargs);
       rc.filename = db.filename;
       rc.persistent = !!sqlite3.capi.sqlite3_js_db_uses_vfs(db.pointer, "opfs");
@@ -658,3 +658,6 @@ sqlite3.initWorker1API = function(){
   globalThis.postMessage({type:'sqlite3-api',result:'worker1-ready'});
 }.bind({sqlite3});
 });
+//#else
+/* Built with the omit-oo1 flag. */
+//#endif ifnot omit-oo1

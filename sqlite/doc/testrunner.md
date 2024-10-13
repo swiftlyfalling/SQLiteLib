@@ -2,6 +2,25 @@
 
 # The testrunner.tcl Script
 
+<ul type=none>
+  <li> 1. <a href=#overview>Overview</a>
+  <li> 2. <a href=#binary_tests>Binary Tests</a>
+<ul type=none>
+  <li> 2.1. <a href=#organization_tests>Organization of Tcl Tests</a>
+  <li> 2.2. <a href=#run_tests>Commands to Run Tests</a>
+  <li> 2.3. <a href=#binary_test_failures>Investigating Binary Test Failures</a>
+</ul>
+  <li> 3. <a href=#source_code_tests>Source Tests</a>
+<ul type=none>
+  <li> 3.1. <a href=#commands_to_run_tests>Commands to Run SQLite Tests</a>
+  <li> 3.2. <a href=#zipvfs_tests>Running ZipVFS Tests</a>
+  <li> 3.3. <a href=#source_code_test_failures>Investigating Source Code Test Failures</a>
+</ul>
+  <li> 4. <a href=#testrunner_options>Extra testrunner.tcl Options</a>
+  <li> 5. <a href=#cpu_cores>Controlling CPU Core Utilization</a>
+</ul>
+
+<a name=overview></a>
 # 1. Overview
 
 testrunner.tcl is a Tcl script used to run multiple SQLite tests using 
@@ -9,12 +28,18 @@ multiple jobs. It supports the following types of tests:
 
   *  Tcl test scripts.
 
-  *  Tests run with [make] commands. Specifically, at time of writing, 
-     [make fuzztest], [make mptest], [make sourcetest] and [make threadtest].
+  *  Tests run with `make` commands.  Examples:
+      -  `make mdevtest`
+      -  `make releasetest`
+      -  `make sdevtest`
+      -  `make testrunner`
 
 testrunner.tcl pipes the output of all tests and builds run into log file
-**testrunner.log**, created in the cwd directory. Searching this file for
-"failed" is a good way to find the output of a failed test.
+**testrunner.log**, created in the current working directory. Search this
+file to find details of errors.  Suggested search commands:
+
+   *  `grep "^!" testrunner.log`
+   *  `grep failed testrunner.log`
 
 testrunner.tcl also populates SQLite database **testrunner.db**. This database
 contains details of all tests run, running and to be run. A useful query
@@ -40,16 +65,17 @@ Running:
 
 in another terminal is a good way to keep an eye on a long running test.
 
-Sometimes testrunner.tcl uses the [testfixture] binary that it is run with
+Sometimes testrunner.tcl uses the `testfixture` binary that it is run with
 to run tests (see "Binary Tests" below). Sometimes it builds testfixture and
 other binaries in specific configurations to test (see "Source Tests").
 
+<a name=binary_tests></a>
 # 2. Binary Tests
 
 The commands described in this section all run various combinations of the Tcl
-test scripts using the [testfixture] binary used to run the testrunner.tcl
+test scripts using the `testfixture` binary used to run the testrunner.tcl
 script (i.e. they do not invoke the compiler to build new binaries, or the
-[make] command to run tests that are not Tcl scripts). The procedure to run
+`make` command to run tests that are not Tcl scripts). The procedure to run
 these tests is therefore:
 
   1. Build the "testfixture" (or "testfixture.exe" for windows) binary using
@@ -61,6 +87,7 @@ these tests is therefore:
 The following sub-sections describe the various options that can be
 passed to testrunner.tcl to test binary testfixture builds.
 
+<a name=organization_tests></a>
 ## 2.1. Organization of Tcl Tests
 
 Tcl tests are stored in files that match the pattern *\*.test*. They are
@@ -91,6 +118,7 @@ Running **all** tests is to run all tests in the full test set, plus a dozen
 or so permutations. The specific permutations that are run as part of "all"
 are defined in file *testrunner_data.tcl*.
 
+<a name=run_tests></a>
 ## 2.2. Commands to Run Tests
 
 To run the "veryquick" test set, use either of the following:
@@ -113,6 +141,12 @@ a specified pattern (e.g. all tests that start with "fts5"), either of:
   ./testfixture $TESTDIR/testrunner.tcl fts5%
   ./testfixture $TESTDIR/testrunner.tcl 'fts5*'
 ```
+
+Strictly speaking, for a test to be run the pattern must match the script
+filename, not including the directory, using the rules of Tcl's 
+\[string match\] command. Except that before the matching is done, any "%"
+characters specified as part of the pattern are transformed to "\*".
+
 
 To run "all" tests (full + permutations):
 
@@ -141,6 +175,7 @@ Or, if the failure occured as part of a permutation:
 
 TODO: An example instead of "$PERMUTATION" and $PATH\_TO\_SCRIPT?
 
+<a name=source_code_tests></a>
 # 3. Source Code Tests
 
 The commands described in this section invoke the C compiler to build 
@@ -159,10 +194,11 @@ shell that supports SQLite 3.31.1 or newer via "package require sqlite3".
 
 TODO: ./configure + Makefile.msc build systems.
 
-## Commands to Run SQLite Tests
+<a name=commands_to_run_tests></a>
+## 3.1. Commands to Run SQLite Tests
 
 The **mdevtest** command is equivalent to running the veryquick tests and
-the [make fuzztest] target once for each of two --enable-all builds - one 
+the `make fuzztest` target once for each of two --enable-all builds - one 
 with debugging enabled and one without:
 
 ```
@@ -201,7 +237,18 @@ of the specific tests run.
   tclsh $TESTDIR/testrunner.tcl release
 ```
 
-## Running ZipVFS Tests
+As with <a href=#source code tests>source code tests</a>, one or more patterns
+may be appended to any of the above commands (mdevtest, sdevtest or release).
+In that case only Tcl tests (no fuzz or other tests) that match the specified
+pattern are run. For example, to run the just the Tcl rtree tests in all 
+builds and configurations supported by "release":
+
+```
+  tclsh $TESTDIR/testrunner.tcl release rtree%
+```
+
+<a name=zipvfs_tests></a>
+## 3.2. Running ZipVFS Tests
 
 testrunner.tcl can build a zipvfs-enabled testfixture and use it to run
 tests from the Zipvfs project with the following command:
@@ -217,7 +264,8 @@ test both SQLite and Zipvfs with a single command:
   tclsh $TESTDIR/testrunner.tcl --zipvfs $PATH_TO_ZIPVFS mdevtest
 ```
 
-## Investigating Source Code Test Failures
+<a name=source_code_test_failures></a>
+## 3.3. Investigating Source Code Test Failures
 
 Investigating a test failure that occurs during source code testing is a
 two step process:
@@ -240,13 +288,45 @@ a dos \*.bat file on windows. For example:
 ```
 
 The generated bash or \*.bat file script accepts a single argument - a makefile
-target to build. This may be used either to run a [make] command test directly,
+target to build. This may be used either to run a `make` command test directly,
 or else to build a testfixture (or testfixture.exe) binary with which to
 run a Tcl test script, as <a href=#binary_test_failures>described above</a>.
 
+<a name=testrunner_options></a>
+# 4. Extra testrunner.tcl Options
 
+The testrunner.tcl script options in this section may be used with both source
+code and binary tests.
 
-# 4. Controlling CPU Core Utilization
+The **--buildonly** option instructs testrunner.tcl just to build the binaries
+required by a test, not to run any actual tests. For example:
+
+```
+  # Build binaries required by release test.
+  tclsh $TESTDIR/testrunner.tcl --buildonly release"
+```
+
+The **--dryrun** option prevents testrunner.tcl from building any binaries
+or running any tests. Instead, it just writes the shell commands that it
+would normally execute into the testrunner.log file. Example:
+
+```
+  # Log the shell commmands that make up the mdevtest test.
+  tclsh $TESTDIR/testrunner.tcl --dryrun mdevtest"
+```
+
+The **--explain** option is similar to --dryrun in that it prevents testrunner.tcl
+from building any binaries or running any tests.  The difference is that --explain
+prints on standard output a human-readable summary of all the builds and tests that
+would have been run.
+
+```
+  # Show what builds and tests would have been run
+  tclsh $TESTDIR/testrunner.tcl --explain mdevtest
+```
+
+<a name=cpu_cores></a>
+# 5. Controlling CPU Core Utilization
 
 When running either binary or source code tests, testrunner.tcl reports the
 number of jobs it intends to use to stdout. e.g.
@@ -274,11 +354,3 @@ testrunner.log and testrunner.db files:
 ```
   $ ./testfixture $TESTDIR/testrunner.tcl njob $NEW_NUMBER_OF_JOBS
 ```
-
-
-
-
-
-
-
-

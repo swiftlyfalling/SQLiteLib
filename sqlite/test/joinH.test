@@ -201,13 +201,13 @@ do_execsql_test 9.0 {
 
 do_catchsql_test 9.1 {
   SELECT rowid FROM wo1, x1, x2;
-} {1 {no such column: rowid}}
+} {1 {ambiguous column name: rowid}}
 do_catchsql_test 9.2 {
   SELECT rowid FROM wo1, (x1, x2);
-} {1 {no such column: rowid}}
+} {1 {ambiguous column name: rowid}}
 do_catchsql_test 9.3 {
   SELECT rowid FROM wo1 JOIN (x1 JOIN x2);
-} {1 {no such column: rowid}}
+} {1 {ambiguous column name: rowid}}
 do_catchsql_test 9.4 {
   SELECT a FROM wo1, x1, x2;
 } {1 {ambiguous column name: a}}
@@ -250,5 +250,95 @@ do_catchsql_test 9.11 {
   SELECT oid FROM wo2 JOIN (wo3 JOIN x3)
 } {0 99}
 
+reset_db
+do_execsql_test 10.0 {
+  CREATE TABLE rt0 (c0 INTEGER, c1 INTEGER, c2 INTEGER, c3 INTEGER, c4 INTEGER);
+  CREATE TABLE rt3 (c3 INTEGER);
+
+  INSERT INTO rt0(c3, c1) VALUES (x'', '1');
+  INSERT INTO rt0(c3, c1) VALUES ('-1', -1e500);
+  INSERT INTO rt0(c3, c1) VALUES (1, x'');
+
+  CREATE VIEW v6(c0, c1, c2) AS SELECT 0, 0, 0;
+}
+
+do_execsql_test 10.1 {
+  SELECT COUNT(*) FROM rt0 LEFT JOIN rt3 JOIN v6 ON ((CASE v6.c0 WHEN rt0.c4 THEN rt3.c3 END) NOT BETWEEN (rt0.c4) AND (NULL)) WHERE (rt0.c1); -- 2
+} {0}
+
+do_execsql_test 10.2 {
+  SELECT COUNT(*) FROM rt0 LEFT JOIN rt3 RIGHT OUTER JOIN v6 ON ((CASE v6.c0 WHEN rt0.c4 THEN rt3.c3 END) NOT BETWEEN (rt0.c4) AND (NULL)) WHERE (rt0.c1); -- 2
+} {0}
+
+#-------------------------------------------------------------------------
+
+do_execsql_test 11.1 {
+  CREATE TABLE t1(a, b);
+  CREATE TABLE t2(c, d);
+  CREATE TABLE t3(e, f);
+
+  INSERT INTO t1 VALUES(1, 1);
+  INSERT INTO t2 VALUES(2, 2);
+  INSERT INTO t3 VALUES(3, 3);
+}
+
+do_execsql_test 11.2 {
+  SELECT * FROM t1 LEFT JOIN t2 RIGHT JOIN t3 ON (t2.c=10)
+} {{} {} {} {} 3 3}
+
+do_execsql_test 11.3 {
+  SELECT * FROM t1 LEFT JOIN t2 RIGHT JOIN t3 ON (t2.c=10) WHERE t1.a=1
+} {}
+
+#-------------------------------------------------------------------------
+reset_db
+
+do_execsql_test 12.1 {
+  CREATE TABLE t1(a1 INT, b1 TEXT);
+  INSERT INTO t1 VALUES(88,'');
+  CREATE TABLE t2(c2 INT, d2 TEXT);
+  INSERT INTO t2 VALUES(88,'');
+  CREATE TABLE t3(e3 TEXT PRIMARY KEY);
+  INSERT INTO t3 VALUES('');
+}
+
+do_execsql_test 12.2 {
+  SELECT * FROM t1 LEFT JOIN t2 ON true RIGHT JOIN t3 ON d2=e3 WHERE c2 BETWEEN NULL AND a1;
+}
+do_execsql_test 12.3 {
+  SELECT * FROM t1 LEFT JOIN t2 ON true RIGHT JOIN t3 ON d2=e3 WHERE c2 BETWEEN NULL AND a1;
+}
+
+#-------------------------------------------------------------------------
+# 2024-04-05 dbsqlfuzz b9e65e2f110df998f1306571fae7af6c01e4d92b
+reset_db
+do_execsql_test 13.1 {
+  CREATE TABLE t1(a INT AS (b), b INT);
+  INSERT INTO t1(b) VALUES(123);
+  CREATE TABLE t2(a INT, c INT);
+  SELECT a FROM t2 NATURAL RIGHT JOIN t1;
+} {123}
+do_execsql_test 13.2 {
+  CREATE INDEX t1a ON t1(a);
+  SELECT a FROM t2 NATURAL RIGHT JOIN t1;
+} {123}
+# Further tests of the same logic (indexes on expressions
+# used by RIGHT JOIN) from check-in ffe23af73fcb324d and
+# forum post https://sqlite.org/forum/forumpost/9b491e1debf0b67a.
+db null NULL
+do_execsql_test 13.3 {
+  CREATE TABLE t3(a INT, b INT);
+  CREATE UNIQUE INDEX t3x ON t3(a, a+b);
+  INSERT INTO t3(a,b) VALUES(1,2),(4,8),(16,32),(4,80),(1,-300);
+  CREATE TABLE t4(x INT, y INT);
+  INSERT INTO t4(x,y) SELECT a, b FROM t3;
+  INSERT INTO t4(x,y) VALUES(99,99);
+  SELECT a1.a, sum( a1.a+a1.b ) FROM t3 AS a1 RIGHT JOIN t4 ON a=x
+   GROUP BY a1.a ORDER BY 1;
+} {NULL NULL 1 -592 4 192 16 48}
+do_execsql_test 13.4 {
+  SELECT sum( a1.a+a1.b ) FROM t3 AS a1 RIGHT JOIN t3 ON true
+   GROUP BY a1.a ORDER BY 1;
+} {-1480 240 480}
 
 finish_test

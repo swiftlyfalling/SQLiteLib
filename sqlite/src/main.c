@@ -765,6 +765,18 @@ int sqlite3_config(int op, ...){
     }
 #endif /* SQLITE_OMIT_DESERIALIZE */
 
+    case SQLITE_CONFIG_ROWID_IN_VIEW: {
+      int *pVal = va_arg(ap,int*);
+#ifdef SQLITE_ALLOW_ROWID_IN_VIEW
+      if( 0==*pVal ) sqlite3GlobalConfig.mNoVisibleRowid = TF_NoVisibleRowid;
+      if( 1==*pVal ) sqlite3GlobalConfig.mNoVisibleRowid = 0;
+      *pVal = (sqlite3GlobalConfig.mNoVisibleRowid==0);
+#else
+      *pVal = 0;
+#endif
+      break;
+    }
+
     default: {
       rc = SQLITE_ERROR;
       break;
@@ -1914,7 +1926,7 @@ int sqlite3CreateFunc(
   assert( SQLITE_FUNC_CONSTANT==SQLITE_DETERMINISTIC );
   assert( SQLITE_FUNC_DIRECT==SQLITE_DIRECTONLY );
   extraFlags = enc &  (SQLITE_DETERMINISTIC|SQLITE_DIRECTONLY|
-                       SQLITE_SUBTYPE|SQLITE_INNOCUOUS);
+                       SQLITE_SUBTYPE|SQLITE_INNOCUOUS|SQLITE_RESULT_SUBTYPE);
   enc &= (SQLITE_FUNC_ENCMASK|SQLITE_ANY);
 
   /* The SQLITE_INNOCUOUS flag is the same bit as SQLITE_FUNC_UNSAFE.  But
@@ -4659,6 +4671,28 @@ int sqlite3_test_control(int op, ...){
       break;
     }
 #endif
+
+    /* sqlite3_test_control(SQLITE_TESTCTRL_JSON_SELFCHECK, &onOff);
+    **
+    ** Activate or deactivate validation of JSONB that is generated from
+    ** text.  Off by default, as the validation is slow.  Validation is
+    ** only available if compiled using SQLITE_DEBUG.
+    **
+    ** If onOff is initially 1, then turn it on.  If onOff is initially
+    ** off, turn it off.  If onOff is initially -1, then change onOff
+    ** to be the current setting.
+    */
+    case SQLITE_TESTCTRL_JSON_SELFCHECK: {
+#if defined(SQLITE_DEBUG) && !defined(SQLITE_OMIT_WSD)
+      int *pOnOff = va_arg(ap, int*);
+      if( *pOnOff<0 ){
+        *pOnOff = sqlite3Config.bJsonSelfcheck;
+      }else{
+        sqlite3Config.bJsonSelfcheck = (u8)((*pOnOff)&0xff);
+      }
+#endif
+      break;
+    }
   }
   va_end(ap);
 #endif /* SQLITE_UNTESTABLE */

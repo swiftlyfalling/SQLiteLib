@@ -159,9 +159,10 @@ static struct GlobalVars {
 } g;
 
 /*
-** Include the external vt02.c module.
+** Include the external vt02.c and randomjson.c modules.
 */
-extern int sqlite3_vt02_init(sqlite3*,char***,void*);
+extern int sqlite3_vt02_init(sqlite3*,char**,const sqlite3_api_routines*);
+extern int sqlite3_randomjson_init(sqlite3*,char**,const sqlite3_api_routines*);
 
 
 /*
@@ -978,7 +979,8 @@ extern int fuzz_invariant(
   int iRow,               /* The row number for pStmt */
   int nRow,               /* Total number of output rows */
   int *pbCorrupt,         /* IN/OUT: Flag indicating a corrupt database file */
-  int eVerbosity          /* How much debugging output */
+  int eVerbosity,         /* How much debugging output */
+  unsigned int dbOpt      /* Default optimization flags */
 );
 
 /* Implementation of sqlite_dbdata and sqlite_dbptr */
@@ -1030,7 +1032,12 @@ static int recoverDatabase(sqlite3 *db){
 /*
 ** Run the SQL text
 */
-static int runDbSql(sqlite3 *db, const char *zSql, unsigned int *pBtsFlags){
+static int runDbSql(
+  sqlite3 *db,                /* Run SQL on this database connection */
+  const char *zSql,           /* The SQL to be run */
+  unsigned int *pBtsFlags,
+  unsigned int dbOpt          /* Default optimization flags */
+){
   int rc;
   sqlite3_stmt *pStmt;
   int bCorrupt = 0;
@@ -1106,7 +1113,7 @@ static int runDbSql(sqlite3 *db, const char *zSql, unsigned int *pBtsFlags){
           iRow++;
           for(iCnt=0; iCnt<99999; iCnt++){
             rc = fuzz_invariant(db, pStmt, iCnt, iRow, nRow,
-                                &bCorrupt, eVerbosity);
+                                &bCorrupt, eVerbosity, dbOpt);
             if( rc==SQLITE_DONE ) break;
             if( rc!=SQLITE_ERROR ) g.nInvariant++;
             if( eVerbosity>0 ){
@@ -1267,6 +1274,8 @@ int runCombinedDbSqlInput(
   }
   sqlite3_limit(cx.db, SQLITE_LIMIT_LIKE_PATTERN_LENGTH, 100);
   sqlite3_hard_heap_limit64(heapLimit);
+  rc = 1;
+  sqlite3_test_control(SQLITE_TESTCTRL_JSON_SELFCHECK, &rc);
 
   if( nDb>=20 && aDb[18]==2 && aDb[19]==2 ){
     aDb[18] = aDb[19] = 1;
@@ -1294,6 +1303,9 @@ int runCombinedDbSqlInput(
 
   /* Add the vt02 virtual table */
   sqlite3_vt02_init(cx.db, 0, 0);
+
+  /* Add the random_json() and random_json5() functions */
+  sqlite3_randomjson_init(cx.db, 0, 0);
 
   /* Add support for sqlite_dbdata and sqlite_dbptr virtual tables used
   ** by the recovery API */
@@ -1324,7 +1336,7 @@ int runCombinedDbSqlInput(
         char cSaved = zSql[i+1];
         zSql[i+1] = 0;
         if( sqlite3_complete(zSql+j) ){
-          rc = runDbSql(cx.db, zSql+j, &btsFlags);
+          rc = runDbSql(cx.db, zSql+j, &btsFlags, dbOpt);
           j = i+1;
         }
         zSql[i+1] = cSaved;
@@ -1334,7 +1346,7 @@ int runCombinedDbSqlInput(
       }
     }
     if( j<i ){
-      runDbSql(cx.db, zSql+j, &btsFlags);
+      runDbSql(cx.db, zSql+j, &btsFlags, dbOpt);
     }
   }
 testrun_finished:
