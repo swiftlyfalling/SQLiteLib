@@ -418,6 +418,8 @@ TESTSRC = \
   $(TOP)/ext/recover/sqlite3recover.c \
   $(TOP)/ext/recover/dbdata.c \
   $(TOP)/ext/recover/test_recover.c \
+  $(TOP)/ext/intck/test_intck.c  \
+  $(TOP)/ext/intck/sqlite3intck.c \
   $(TOP)/ext/rbu/test_rbu.c
 
 # Statically linked extensions
@@ -447,6 +449,7 @@ TESTSRC += \
   $(TOP)/ext/misc/percentile.c \
   $(TOP)/ext/misc/prefixes.c \
   $(TOP)/ext/misc/qpvtab.c \
+  $(TOP)/ext/misc/randomjson.c \
   $(TOP)/ext/misc/regexp.c \
   $(TOP)/ext/misc/remember.c \
   $(TOP)/ext/misc/series.c \
@@ -600,6 +603,7 @@ SHELL_OPT += -DSQLITE_ENABLE_DBPAGE_VTAB
 SHELL_OPT += -DSQLITE_ENABLE_DBSTAT_VTAB
 SHELL_OPT += -DSQLITE_ENABLE_BYTECODE_VTAB
 SHELL_OPT += -DSQLITE_ENABLE_OFFSET_SQL_FUNC
+SHELL_OPT += -DSQLITE_STRICT_SUBTYPE=1
 FUZZERSHELL_OPT =
 FUZZCHECK_OPT += -I$(TOP)/test
 FUZZCHECK_OPT += -I$(TOP)/ext/recover
@@ -630,7 +634,9 @@ FUZZCHECK_OPT += \
   -DSQLITE_MAX_MMAP_SIZE=0 \
   -DSQLITE_OMIT_LOAD_EXTENSION \
   -DSQLITE_PRINTF_PRECISION_LIMIT=1000 \
-  -DSQLITE_PRIVATE=""
+  -DSQLITE_PRIVATE="" \
+  -DSQLITE_STRICT_SUBTYPE=1 \
+  -DSQLITE_STATIC_RANDOMJSON
 
 FUZZCHECK_SRC += $(TOP)/test/fuzzcheck.c
 FUZZCHECK_SRC += $(TOP)/test/ossfuzz.c
@@ -638,6 +644,7 @@ FUZZCHECK_SRC += $(TOP)/test/fuzzinvariants.c
 FUZZCHECK_SRC += $(TOP)/ext/recover/dbdata.c
 FUZZCHECK_SRC += $(TOP)/ext/recover/sqlite3recover.c
 FUZZCHECK_SRC += $(TOP)/test/vt02.c
+FUZZCHECK_SRC += $(TOP)/ext/misc/randomjson.c
 DBFUZZ_OPT =
 ST_OPT = -DSQLITE_OS_KV_OPTIONAL
 
@@ -709,6 +716,21 @@ fuzzcheck-asan$(TEXE):	$(FUZZCHECK_SRC) sqlite3.c sqlite3.h $(FUZZCHECK_DEP)
 
 fuzzcheck-ubsan$(TEXE):	$(FUZZCHECK_SRC) sqlite3.c sqlite3.h $(FUZZCHECK_DEP)
 	$(LTLINK) -o $@ -fsanitize=undefined $(FUZZCHECK_OPT) $(FUZZCHECK_SRC) sqlite3.c $(TLIBS)
+
+# Usage:    FUZZDB=filename make run-fuzzcheck
+#
+# Where filename is a fuzzcheck database, this target builds and runs
+# fuzzcheck, fuzzcheck-asan, and fuzzcheck-ubsan on that database.
+#
+# FUZZDB can be a glob pattern of two or more databases. Example:
+#
+#     FUZZDB=test/fuzzdata*.db make run-fuzzcheck
+#
+run-fuzzcheck:	fuzzcheck$(TEXE) fuzzcheck-asan$(TEXE) fuzzcheck-ubsan$(TEXE)
+	@if test "$(FUZZDB)" = ""; then echo 'ERROR: No FUZZDB specified. Rerun with FUZZDB=filename'; exit 1; fi
+	./fuzzcheck$(TEXE) --spinner $(FUZZDB)
+	./fuzzcheck-asan$(TEXE) --spinner $(FUZZDB)
+	./fuzzcheck-ubsan$(TEXE) --spinner $(FUZZDB)
 
 ossshell$(TEXE):	$(TOP)/test/ossfuzz.c $(TOP)/test/ossshell.c sqlite3.c sqlite3.h
 	$(LTLINK) -o $@ $(FUZZCHECK_OPT) $(TOP)/test/ossshell.c \
@@ -795,7 +817,7 @@ has_tclsh85:
 	touch .target_source
 
 sqlite3.c:	.target_source $(TOP)/tool/mksqlite3c.tcl src-verify has_tclsh84
-	$(TCLSH_CMD) $(TOP)/tool/mksqlite3c.tcl $(AMALGAMATION_LINE_MACROS)
+	$(TCLSH_CMD) $(TOP)/tool/mksqlite3c.tcl $(AMALGAMATION_LINE_MACROS) $(EXTRA_SRC)
 	cp tsrc/sqlite3ext.h .
 	cp $(TOP)/ext/session/sqlite3session.h .
 
@@ -806,7 +828,7 @@ sqlite3r.c: sqlite3.c sqlite3r.h has_tclsh84
 	cp $(TOP)/ext/recover/sqlite3recover.c tsrc/
 	cp $(TOP)/ext/recover/sqlite3recover.h tsrc/
 	cp $(TOP)/ext/recover/dbdata.c tsrc/
-	$(TCLSH_CMD) $(TOP)/tool/mksqlite3c.tcl --enable-recover $(AMALGAMATION_LINE_MACROS)
+	$(TCLSH_CMD) $(TOP)/tool/mksqlite3c.tcl --enable-recover $(AMALGAMATION_LINE_MACROS) $(EXTRA_SRC)
 
 sqlite3ext.h:	.target_source
 	cp tsrc/sqlite3ext.h .
@@ -1132,33 +1154,37 @@ keywordhash.h:	$(TOP)/tool/mkkeywordhash.c
 	$(BCC) -o mkkeywordhash$(BEXE) $(OPT_FEATURE_FLAGS) $(OPTS) $(TOP)/tool/mkkeywordhash.c
 	./mkkeywordhash$(BEXE) >keywordhash.h
 
-# Source files that go into making shell.c
-SHELL_SRC = \
-	$(TOP)/src/shell.c.in \
-        $(TOP)/ext/misc/appendvfs.c \
-	$(TOP)/ext/misc/completion.c \
-        $(TOP)/ext/misc/decimal.c \
-        $(TOP)/ext/misc/basexx.c \
-        $(TOP)/ext/misc/base64.c \
-        $(TOP)/ext/misc/base85.c \
-	$(TOP)/ext/misc/fileio.c \
-        $(TOP)/ext/misc/ieee754.c \
-        $(TOP)/ext/misc/regexp.c \
-        $(TOP)/ext/misc/series.c \
-	$(TOP)/ext/misc/shathree.c \
-	$(TOP)/ext/misc/sqlar.c \
-        $(TOP)/ext/misc/uint.c \
-	$(TOP)/ext/expert/sqlite3expert.c \
-	$(TOP)/ext/expert/sqlite3expert.h \
-	$(TOP)/ext/misc/zipfile.c \
-	$(TOP)/ext/misc/memtrace.c \
-	$(TOP)/ext/misc/pcachetrace.c \
-	$(TOP)/ext/recover/dbdata.c \
-	$(TOP)/ext/recover/sqlite3recover.c \
-	$(TOP)/ext/recover/sqlite3recover.h \
-        $(TOP)/src/test_windirent.c
+# Source and header files that shell.c depends on
+SHELL_DEP = \
+    $(TOP)/src/shell.c.in \
+    $(TOP)/ext/consio/console_io.c \
+    $(TOP)/ext/consio/console_io.h \
+    $(TOP)/ext/expert/sqlite3expert.c \
+    $(TOP)/ext/expert/sqlite3expert.h \
+    $(TOP)/ext/intck/sqlite3intck.c \
+    $(TOP)/ext/intck/sqlite3intck.h \
+    $(TOP)/ext/misc/appendvfs.c \
+    $(TOP)/ext/misc/base64.c \
+    $(TOP)/ext/misc/base85.c \
+    $(TOP)/ext/misc/completion.c \
+    $(TOP)/ext/misc/decimal.c \
+    $(TOP)/ext/misc/fileio.c \
+    $(TOP)/ext/misc/ieee754.c \
+    $(TOP)/ext/misc/memtrace.c \
+    $(TOP)/ext/misc/pcachetrace.c \
+    $(TOP)/ext/misc/regexp.c \
+    $(TOP)/ext/misc/series.c \
+    $(TOP)/ext/misc/shathree.c \
+    $(TOP)/ext/misc/sqlar.c \
+    $(TOP)/ext/misc/uint.c \
+    $(TOP)/ext/misc/zipfile.c \
+    $(TOP)/ext/recover/dbdata.c \
+    $(TOP)/ext/recover/sqlite3recover.c \
+    $(TOP)/ext/recover/sqlite3recover.h \
+    $(TOP)/src/test_windirent.c \
+    $(TOP)/src/test_windirent.h
 
-shell.c:	$(SHELL_SRC) $(TOP)/tool/mkshellc.tcl has_tclsh84
+shell.c:	$(SHELL_DEP) $(TOP)/tool/mkshellc.tcl has_tclsh84
 	$(TCLSH_CMD) $(TOP)/tool/mkshellc.tcl >shell.c
 
 
@@ -1274,6 +1300,8 @@ TESTFIXTURE_FLAGS += -DSQLITE_ENABLE_STMTVTAB
 TESTFIXTURE_FLAGS += -DSQLITE_ENABLE_DBPAGE_VTAB
 TESTFIXTURE_FLAGS += -DSQLITE_ENABLE_BYTECODE_VTAB
 TESTFIXTURE_FLAGS += -DSQLITE_CKSUMVFS_STATIC
+TESTFIXTURE_FLAGS += -DSQLITE_STATIC_RANDOMJSON
+TESTFIXTURE_FLAGS += -DSQLITE_STRICT_SUBTYPE=1
 
 TESTFIXTURE_SRC0 = $(TESTSRC2) libsqlite3.la
 TESTFIXTURE_SRC1 = sqlite3.c
@@ -1284,9 +1312,9 @@ testfixture$(TEXE):	has_tclsh85 $(TESTFIXTURE_SRC)
 	$(LTLINK) -DSQLITE_NO_SYNC=1 $(TEMP_STORE) $(TESTFIXTURE_FLAGS) \
 		-o $@ $(TESTFIXTURE_SRC) $(LIBTCL) $(TLIBS)
 
-coretestprogs:	$(TESTPROGS)
+coretestprogs:	testfixture$(BEXE) sqlite3$(BEXE)
 
-testprogs:	coretestprogs srcck1$(BEXE) fuzzcheck$(TEXE) sessionfuzz$(TEXE)
+testprogs:	$(TESTPROGS) srcck1$(BEXE) fuzzcheck$(TEXE) sessionfuzz$(TEXE)
 
 # A very detailed test running most or all test cases
 fulltest:	alltest fuzztest

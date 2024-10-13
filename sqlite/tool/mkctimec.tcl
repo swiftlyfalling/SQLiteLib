@@ -7,6 +7,13 @@
 # definition used in src/ctime.c, run this script from
 # the checkout root. It generates src/ctime.c .
 #
+# Results are normally written into src/ctime.c.  But if an argument is
+# provided, results are written there instead.  Examples:
+#
+#    tclsh tool/mkctimec.tcl                ;# <-- results to src/ctime.c
+#
+#    tclsh tool/mkctimec.tcl /dev/tty       ;# <-- results to the terminal
+#
 
 
 set ::headWarning {/* DO NOT EDIT!
@@ -98,6 +105,7 @@ set boolean_defnnz_options {
 set boolean_defnil_options {
   SQLITE_32BIT_ROWID
   SQLITE_4_BYTE_ALIGNED_MALLOC
+  SQLITE_ALLOW_ROWID_IN_VIEW
   SQLITE_ALLOW_URI_AUTHORITY
   SQLITE_BUG_COMPATIBLE_20160819
   SQLITE_CASE_SENSITIVE_LIKE
@@ -429,10 +437,15 @@ foreach v $value2_options {
 }]
 }
 
-set ctime_c "src/ctime.c"
+if {$argc>0} {
+  set destfile [lindex $argv 0]
+} else {
+  set destfile "[file dir [file dir [file normal $argv0]]]/src/ctime.c"
+  puts "Overwriting $destfile..."
+}
 
-if {[catch {set cfd [open $ctime_c w]}]!=0} {
-  puts stderr "File '$ctime_c' unwritable."
+if {[catch {set cfd [open $destfile w]}]!=0} {
+  puts stderr "File '$destfile' unwritable."
   exit 1;
 }
 

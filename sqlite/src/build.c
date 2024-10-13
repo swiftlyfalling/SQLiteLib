@@ -189,7 +189,7 @@ void sqlite3FinishCoding(Parse *pParse){
     }
     sqlite3VdbeAddOp0(v, OP_Halt);
 
-#if SQLITE_USER_AUTHENTICATION
+#if SQLITE_USER_AUTHENTICATION && !defined(SQLITE_OMIT_SHARED_CACHE)
     if( pParse->nTableLock>0 && db->init.busy==0 ){
       sqlite3UserAuthInit(db);
       if( db->auth.authLevel<UAUTH_User ){
@@ -720,7 +720,7 @@ void sqlite3ColumnSetExpr(
 */
 Expr *sqlite3ColumnExpr(Table *pTab, Column *pCol){
   if( pCol->iDflt==0 ) return 0;
-  if( NEVER(!IsOrdinaryTable(pTab)) ) return 0;
+  if( !IsOrdinaryTable(pTab) ) return 0;
   if( NEVER(pTab->u.tab.pDfltList==0) ) return 0;
   if( NEVER(pTab->u.tab.pDfltList->nExpr<pCol->iDflt) ) return 0;
   return pTab->u.tab.pDfltList->a[pCol->iDflt-1].pExpr;
@@ -872,6 +872,9 @@ void sqlite3DeleteTable(sqlite3 *db, Table *pTable){
   if( !pTable ) return;
   if( db->pnBytesFreed==0 && (--pTable->nTabRef)>0 ) return;
   deleteTable(db, pTable);
+}
+void sqlite3DeleteTableGeneric(sqlite3 *db, void *pTable){
+  sqlite3DeleteTable(db, (Table*)pTable);
 }
 
 
@@ -1410,7 +1413,8 @@ void sqlite3ColumnPropertiesFromName(Table *pTab, Column *pCol){
 /*
 ** Clean up the data structures associated with the RETURNING clause.
 */
-static void sqlite3DeleteReturning(sqlite3 *db, Returning *pRet){
+static void sqlite3DeleteReturning(sqlite3 *db, void *pArg){
+  Returning *pRet = (Returning*)pArg;
   Hash *pHash;
   pHash = &(db->aDb[1].pSchema->trigHash);
   sqlite3HashInsert(pHash, pRet->zName, 0);
@@ -1452,8 +1456,7 @@ void sqlite3AddReturning(Parse *pParse, ExprList *pList){
   pParse->u1.pReturning = pRet;
   pRet->pParse = pParse;
   pRet->pReturnEL = pList;
-  sqlite3ParserAddCleanup(pParse,
-     (void(*)(sqlite3*,void*))sqlite3DeleteReturning, pRet);
+  sqlite3ParserAddCleanup(pParse, sqlite3DeleteReturning, pRet);
   testcase( pParse->earlyCleanup );
   if( db->mallocFailed ) return;
   sqlite3_snprintf(sizeof(pRet->zName), pRet->zName,
@@ -1652,7 +1655,8 @@ char sqlite3AffinityType(const char *zIn, Column *pCol){
 
   assert( zIn!=0 );
   while( zIn[0] ){
-    h = (h<<8) + sqlite3UpperToLower[(*zIn)&0xff];
+    u8 x = *(u8*)zIn;
+    h = (h<<8) + sqlite3UpperToLower[x];
     zIn++;
     if( h==(('c'<<24)+('h'<<16)+('a'<<8)+'r') ){             /* CHAR */
       aff = SQLITE_AFF_TEXT;
@@ -2824,20 +2828,20 @@ void sqlite3EndTable(
       int regRowid;       /* Rowid of the next row to insert */
       int addrInsLoop;    /* Top of the loop for inserting rows */
       Table *pSelTab;     /* A table that describes the SELECT results */
+      int iCsr;           /* Write cursor on the new table */
 
       if( IN_SPECIAL_PARSE ){
         pParse->rc = SQLITE_ERROR;
         pParse->nErr++;
         return;
       }
+      iCsr = pParse->nTab++;
       regYield = ++pParse->nMem;
       regRec = ++pParse->nMem;
       regRowid = ++pParse->nMem;
-      assert(pParse->nTab==1);
       sqlite3MayAbort(pParse);
-      sqlite3VdbeAddOp3(v, OP_OpenWrite, 1, pParse->regRoot, iDb);
+      sqlite3VdbeAddOp3(v, OP_OpenWrite, iCsr, pParse->regRoot, iDb);
       sqlite3VdbeChangeP5(v, OPFLAG_P2ISREG);
-      pParse->nTab = 2;
       addrTop = sqlite3VdbeCurrentAddr(v) + 1;
       sqlite3VdbeAddOp3(v, OP_InitCoroutine, regYield, 0, addrTop);
       if( pParse->nErr ) return;
@@ -2858,11 +2862,11 @@ void sqlite3EndTable(
       VdbeCoverage(v);
       sqlite3VdbeAddOp3(v, OP_MakeRecord, dest.iSdst, dest.nSdst, regRec);
       sqlite3TableAffinity(v, p, 0);
-      sqlite3VdbeAddOp2(v, OP_NewRowid, 1, regRowid);
-      sqlite3VdbeAddOp3(v, OP_Insert, 1, regRec, regRowid);
+      sqlite3VdbeAddOp2(v, OP_NewRowid, iCsr, regRowid);
+      sqlite3VdbeAddOp3(v, OP_Insert, iCsr, regRec, regRowid);
       sqlite3VdbeGoto(v, addrInsLoop);
       sqlite3VdbeJumpHere(v, addrInsLoop);
-      sqlite3VdbeAddOp1(v, OP_Close, 1);
+      sqlite3VdbeAddOp1(v, OP_Close, iCsr);
     }
 
     /* Compute the complete text of the CREATE statement */
@@ -2919,13 +2923,10 @@ void sqlite3EndTable(
     /* Test for cycles in generated columns and illegal expressions
     ** in CHECK constraints and in DEFAULT clauses. */
     if( p->tabFlags & TF_HasGenerated ){
-      sqlite3VdbeAddOp4(v, OP_SqlExec, 1, 0, 0,
+      sqlite3VdbeAddOp4(v, OP_SqlExec, 0x0001, 0, 0,
              sqlite3MPrintf(db, "SELECT*FROM\"%w\".\"%w\"",
                    db->aDb[iDb].zDbSName, p->zName), P4_DYNAMIC);
     }
-    sqlite3VdbeAddOp4(v, OP_SqlExec, 1, 0, 0,
-           sqlite3MPrintf(db, "PRAGMA \"%w\".integrity_check(%Q)",
-                 db->aDb[iDb].zDbSName, p->zName), P4_DYNAMIC);
   }
 
   /* Add the table to the in-memory representation of the database.
@@ -3002,9 +3003,12 @@ void sqlite3CreateView(
   ** on a view, even though views do not have rowids.  The following flag
   ** setting fixes this problem.  But the fix can be disabled by compiling
   ** with -DSQLITE_ALLOW_ROWID_IN_VIEW in case there are legacy apps that
-  ** depend upon the old buggy behavior. */
-#ifndef SQLITE_ALLOW_ROWID_IN_VIEW
-  p->tabFlags |= TF_NoVisibleRowid;
+  ** depend upon the old buggy behavior.  The ability can also be toggled
+  ** using sqlite3_config(SQLITE_CONFIG_ROWID_IN_VIEW,...) */
+#ifdef SQLITE_ALLOW_ROWID_IN_VIEW
+  p->tabFlags |= sqlite3Config.mNoVisibleRowid; /* Optional. Allow by default */
+#else
+  p->tabFlags |= TF_NoVisibleRowid;             /* Never allow rowid in view */
 #endif
 
   sqlite3TwoPartName(pParse, pName1, pName2, &pName);
@@ -3060,8 +3064,9 @@ create_view_fail:
 #if !defined(SQLITE_OMIT_VIEW) || !defined(SQLITE_OMIT_VIRTUALTABLE)
 /*
 ** The Table structure pTable is really a VIEW.  Fill in the names of
-** the columns of the view in the pTable structure.  Return the number
-** of errors.  If an error is seen leave an error message in pParse->zErrMsg.
+** the columns of the view in the pTable structure.  Return non-zero if
+** there are errors.  If an error is seen an error message is left
+** in pParse->zErrMsg.
 */
 static SQLITE_NOINLINE int viewGetColumnNames(Parse *pParse, Table *pTable){
   Table *pSelTab;   /* A fake table from which we get the result set */
@@ -3184,7 +3189,7 @@ static SQLITE_NOINLINE int viewGetColumnNames(Parse *pParse, Table *pTable){
     sqlite3DeleteColumnNames(db, pTable);
   }
 #endif /* SQLITE_OMIT_VIEW */
-  return nErr; 
+  return nErr + pParse->nErr; 
 }
 int sqlite3ViewGetColumnNames(Parse *pParse, Table *pTable){
   assert( pTable!=0 );
@@ -5517,7 +5522,7 @@ void sqlite3Reindex(Parse *pParse, Token *pName1, Token *pName2){
   if( iDb<0 ) return;
   z = sqlite3NameFromToken(db, pObjName);
   if( z==0 ) return;
-  zDb = db->aDb[iDb].zDbSName;
+  zDb = pName2->n ? db->aDb[iDb].zDbSName : 0;
   pTab = sqlite3FindTable(db, z, zDb);
   if( pTab ){
     reindexTable(pParse, pTab, 0);
@@ -5527,6 +5532,7 @@ void sqlite3Reindex(Parse *pParse, Token *pName1, Token *pName2){
   pIndex = sqlite3FindIndex(db, z, zDb);
   sqlite3DbFree(db, z);
   if( pIndex ){
+    iDb = sqlite3SchemaToIndex(db, pIndex->pTable->pSchema);
     sqlite3BeginWriteOperation(pParse, 0, iDb);
     sqlite3RefillIndex(pParse, pIndex, -1);
     return;
@@ -5691,5 +5697,8 @@ void sqlite3WithDelete(sqlite3 *db, With *pWith){
     }
     sqlite3DbFree(db, pWith);
   }
+}
+void sqlite3WithDeleteGeneric(sqlite3 *db, void *pWith){
+  sqlite3WithDelete(db, (With*)pWith);
 }
 #endif /* !defined(SQLITE_OMIT_CTE) */

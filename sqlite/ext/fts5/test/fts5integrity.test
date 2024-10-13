@@ -355,4 +355,57 @@ do_execsql_test 11.4 {
   PRAGMA integrity_check(t2);
 } {ok}
 
+#-------------------------------------------------------------------
+reset_db
+
+do_execsql_test 12.1 {
+  CREATE VIRTUAL TABLE x1 USING fts5(a, b);
+  INSERT INTO x1 VALUES('one', 'two');
+  INSERT INTO x1 VALUES('three', 'four');
+  INSERT INTO x1 VALUES('five', 'six');
+}
+
+do_execsql_test 12.2 {
+  PRAGMA integrity_check
+} {ok}
+
+db close
+sqlite3 db test.db -readonly 1
+
+explain_i {
+  PRAGMA integrity_check
+  }
+do_execsql_test 12.3 {
+  PRAGMA integrity_check
+} {ok}
+
+
+#-------------------------------------------------------------------
+reset_db
+do_execsql_test 13.1 {
+  CREATE VIRTUAL TABLE t1 USING fts5(a, tokenize=ascii);
+  INSERT INTO t1 VALUES('a b c'), ('d e f');
+  PRAGMA integrity_check;
+} {ok}
+
+db close
+sqlite3 db test.db
+do_catchsql_test 13.2 {
+  PRAGMA integrity_check;
+} {0 ok}
+
+do_execsql_test 13.3 {
+  PRAGMA writable_schema = 1;
+  UPDATE sqlite_schema SET sql = 'CREATE VIRTUAL TABLE t1 USING fts5(a, tokenize=blah)'
+  WHERE name = 't1';
+}
+
+db close
+sqlite3 db test.db
+breakpoint
+do_catchsql_test 13.4 {
+  PRAGMA integrity_check;
+} {1 {no such tokenizer: blah}}
+
+
 finish_test

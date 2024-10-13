@@ -1,3 +1,4 @@
+//#ifnot omit-oo1
 /*
   2022-08-24
 
@@ -41,9 +42,13 @@
    - `onready` (optional, but...): this callback is called with no
    arguments when the worker fires its initial
    'sqlite3-api'/'worker1-ready' message, which it does when
-   sqlite3.initWorker1API() completes its initialization. This is
-   the simplest way to tell the worker to kick off work at the
-   earliest opportunity.
+   sqlite3.initWorker1API() completes its initialization. This is the
+   simplest way to tell the worker to kick off work at the earliest
+   opportunity, and the only way to know when the worker module has
+   completed loading. The irony of using a callback for this, instead
+   of returning a promise from sqlite3Worker1Promiser() is not lost on
+   the developers: see sqlite3Worker1Promiser.v2() which uses a
+   Promise instead.
 
    - `onunhandled` (optional): a callback which gets passed the
    message event object for any worker.onmessage() events which
@@ -155,6 +160,7 @@ globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfi
   if(!config.worker) config.worker = callee.defaultConfig.worker;
   if('function'===typeof config.worker) config.worker = config.worker();
   let dbId;
+  let promiserFunc;
   config.worker.onmessage = function(ev){
     ev = ev.data;
     debug('worker1.onmessage',ev);
@@ -162,7 +168,7 @@ globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfi
     if(!msgHandler){
       if(ev && 'sqlite3-api'===ev.type && 'worker1-ready'===ev.result) {
         /*fired one time when the Worker1 API initializes*/
-        if(config.onready) config.onready();
+        if(config.onready) config.onready(promiserFunc);
         return;
       }
       msgHandler = handlerMap[ev.type] /* check for exec per-row callback */;
@@ -191,7 +197,7 @@ globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfi
     try {msgHandler.resolve(ev)}
     catch(e){msgHandler.reject(e)}
   }/*worker.onmessage()*/;
-  return function(/*(msgType, msgArgs) || (msgEnvelope)*/){
+  return promiserFunc = function(/*(msgType, msgArgs) || (msgEnvelope)*/){
     let msg;
     if(1===arguments.length){
       msg = arguments[0];
@@ -199,10 +205,11 @@ globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfi
       msg = Object.create(null);
       msg.type = arguments[0];
       msg.args = arguments[1];
+      msg.dbId = msg.args.dbId;
     }else{
-      toss("Invalid arugments for sqlite3Worker1Promiser()-created factory.");
+      toss("Invalid arguments for sqlite3Worker1Promiser()-created factory.");
     }
-    if(!msg.dbId) msg.dbId = dbId;
+    if(!msg.dbId && msg.type!=='open') msg.dbId = dbId;
     msg.messageId = genMsgId(msg);
     msg.departureTime = performance.now();
     const proxy = Object.create(null);
@@ -244,12 +251,12 @@ globalThis.sqlite3Worker1Promiser = function callee(config = callee.defaultConfi
     return p;
   };
 }/*sqlite3Worker1Promiser()*/;
+
 globalThis.sqlite3Worker1Promiser.defaultConfig = {
   worker: function(){
-//#if target=es6-bundler-friendly
-    return new Worker("sqlite3-worker1-bundler-friendly.mjs",{
-      type: 'module' /* Noting that neither Firefox nor Safari suppor this,
-                        as of this writing. */
+//#if target=es6-module
+    return new Worker(new URL("sqlite3-worker1-bundler-friendly.mjs", import.meta.url),{
+      type: 'module'
     });
 //#else
     let theJs = "sqlite3-worker1.js";
@@ -267,8 +274,73 @@ globalThis.sqlite3Worker1Promiser.defaultConfig = {
     }
     return new Worker(theJs + globalThis.location.search);
 //#endif
-  }.bind({
+  }
+//#ifnot target=es6-module
+  .bind({
     currentScript: globalThis?.document?.currentScript
-  }),
+  })
+//#endif
+  ,
   onerror: (...args)=>console.error('worker1 promiser error',...args)
-};
+}/*defaultConfig*/;
+
+/**
+   sqlite3Worker1Promiser.v2(), added in 3.46, works identically to
+   sqlite3Worker1Promiser() except that it returns a Promise instead
+   of relying an an onready callback in the config object. The Promise
+   resolves to the same factory function which
+   sqlite3Worker1Promiser() returns.
+
+   If config is-a function or is an object which contains an onready
+   function, that function is replaced by a proxy which will resolve
+   after calling the original function and will reject if that
+   function throws.
+*/
+sqlite3Worker1Promiser.v2 = function(config){
+  let oldFunc;
+  if( 'function' == typeof config ){
+    oldFunc = config;
+    config = {};
+  }else if('function'===typeof config?.onready){
+    oldFunc = config.onready;
+    delete config.onready;
+  }
+  const promiseProxy = Object.create(null);
+  config = Object.assign((config || Object.create(null)),{
+    onready: async function(func){
+      try {
+        if( oldFunc ) await oldFunc(func);
+        promiseProxy.resolve(func);
+      }
+      catch(e){promiseProxy.reject(e)}
+    }
+  });
+  const p = new Promise(function(resolve,reject){
+    promiseProxy.resolve = resolve;
+    promiseProxy.reject = reject;
+  });
+  try{
+    this.original(config);
+  }catch(e){
+    promiseProxy.reject(e);
+  }
+  return p;
+}.bind({
+   /* We do this because clients are
+      recommended to delete globalThis.sqlite3Worker1Promiser. */
+  original: sqlite3Worker1Promiser
+});
+
+//#if target=es6-module
+/**
+  When built as a module, we export sqlite3Worker1Promiser.v2()
+  instead of sqlite3Worker1Promise() because (A) its interface is more
+  conventional for ESM usage and (B) the ESM option export option for
+  this API did not exist until v2 was created, so there's no backwards
+  incompatibility.
+*/
+export default sqlite3Worker1Promiser.v2;
+//#endif /* target=es6-module */
+//#else
+/* Built with the omit-oo1 flag. */
+//#endif ifnot omit-oo1

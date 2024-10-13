@@ -633,7 +633,13 @@ void *sqlite3ParserAddCleanup(
   void (*xCleanup)(sqlite3*,void*),   /* The cleanup routine */
   void *pPtr                          /* Pointer to object to be cleaned up */
 ){
-  ParseCleanup *pCleanup = sqlite3DbMallocRaw(pParse->db, sizeof(*pCleanup));
+  ParseCleanup *pCleanup;
+  if( sqlite3FaultSim(300) ){
+    pCleanup = 0;
+    sqlite3OomFault(pParse->db);
+  }else{
+    pCleanup = sqlite3DbMallocRaw(pParse->db, sizeof(*pCleanup));
+  }
   if( pCleanup ){
     pCleanup->pNext = pParse->pCleanup;
     pParse->pCleanup = pCleanup;
@@ -868,6 +874,7 @@ static int sqlite3LockAndPrepare(
   assert( (rc&db->errMask)==rc );
   db->busyHandler.nBusy = 0;
   sqlite3_mutex_leave(db->mutex);
+  assert( rc==SQLITE_OK || (*ppStmt)==0 );
   return rc;
 }
 

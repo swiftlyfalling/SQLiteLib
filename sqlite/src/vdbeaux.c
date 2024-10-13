@@ -211,10 +211,11 @@ static int growOpArray(Vdbe *v, int nOp){
 **   sqlite3CantopenError(lineno)
 */
 static void test_addop_breakpoint(int pc, Op *pOp){
-  static int n = 0;
+  static u64 n = 0;
   (void)pc;
   (void)pOp;
   n++;
+  if( n==LARGEST_UINT64 ) abort(); /* so that n is used, preventing a warning */
 }
 #endif
 
@@ -938,6 +939,15 @@ static void resolveP2Values(Vdbe *p, int *pMaxFuncArgs){
             assert( aLabel!=0 );  /* True because of tag-20230419-1 */
             pOp->p2 = aLabel[ADDR(pOp->p2)];
           }
+
+          /* OPFLG_JUMP opcodes never have P2==0, though OPFLG_JUMP0 opcodes
+          ** might */
+          assert( pOp->p2>0 
+                  || (sqlite3OpcodeProperty[pOp->opcode] & OPFLG_JUMP0)!=0 );
+
+          /* Jumps never go off the end of the bytecode array */
+          assert( pOp->p2<p->nOp
+                  || (sqlite3OpcodeProperty[pOp->opcode] & OPFLG_JUMP)==0 );
           break;
         }
       }
@@ -1399,6 +1409,10 @@ static void freeP4(sqlite3 *db, int p4type, void *p4){
       if( db->pnBytesFreed==0 ) sqlite3VtabUnlock((VTable *)p4);
       break;
     }
+    case P4_TABLEREF: {
+      if( db->pnBytesFreed==0 ) sqlite3DeleteTable(db, (Table*)p4);
+      break;
+    }
   }
 }
 
@@ -1526,7 +1540,7 @@ static void SQLITE_NOINLINE vdbeChangeP4Full(
   int n
 ){
   if( pOp->p4type ){
-    freeP4(p->db, pOp->p4type, pOp->p4.p);
+    assert( pOp->p4type > P4_FREE_IF_LE );
     pOp->p4type = 0;
     pOp->p4.p = 0;
   }
@@ -3341,9 +3355,9 @@ int sqlite3VdbeHalt(Vdbe *p){
 
     /* Check for immediate foreign key violations. */
     if( p->rc==SQLITE_OK || (p->errorAction==OE_Fail && !isSpecialError) ){
-      sqlite3VdbeCheckFk(p, 0);
+      (void)sqlite3VdbeCheckFk(p, 0);
     }
- 
+
     /* If the auto-commit flag is set and this is the only active writer
     ** VM, then we do either a commit or rollback of the current transaction.
     **
@@ -4055,6 +4069,23 @@ static void serialGet(
     pMem->flags = IsNaN(x) ? MEM_Null : MEM_Real;
   }
 }
+static int serialGet7(
+  const unsigned char *buf,     /* Buffer to deserialize from */
+  Mem *pMem                     /* Memory cell to write value into */
+){
+  u64 x = FOUR_BYTE_UINT(buf);
+  u32 y = FOUR_BYTE_UINT(buf+4);
+  x = (x<<32) + y;
+  assert( sizeof(x)==8 && sizeof(pMem->u.r)==8 );
+  swapMixedEndianFloat(x);
+  memcpy(&pMem->u.r, &x, sizeof(x));
+  if( IsNaN(x) ){
+    pMem->flags = MEM_Null;
+    return 1;
+  }
+  pMem->flags = MEM_Real;
+  return 0;
+}
 void sqlite3VdbeSerialGet(
   const unsigned char *buf,     /* Buffer to deserialize from */
   u32 serial_type,              /* Serial type to deserialize */
@@ -4494,17 +4525,15 @@ int sqlite3IntFloatCompare(i64 i, double r){
     return (x<r) ? -1 : (x>r);
   }else{
     i64 y;
-    double s;
     if( r<-9223372036854775808.0 ) return +1;
     if( r>=9223372036854775808.0 ) return -1;
     y = (i64)r;
     if( i<y ) return -1;
     if( i>y ) return +1;
-    s = (double)i;
-    testcase( doubleLt(s,r) );
-    testcase( doubleLt(r,s) );
-    testcase( doubleEq(r,s) );
-    return (s<r) ? -1 : (s>r);
+    testcase( doubleLt(((double)i),r) );
+    testcase( doubleLt(r,((double)i)) );
+    testcase( doubleEq(r,((double)i)) );
+    return (((double)i)<r) ? -1 : (((double)i)>r);
   }
 }
 
@@ -4734,7 +4763,7 @@ int sqlite3VdbeRecordCompareWithSkip(
       }else if( serial_type==0 ){
         rc = -1;
       }else if( serial_type==7 ){
-        sqlite3VdbeSerialGet(&aKey1[d1], serial_type, &mem1);
+        serialGet7(&aKey1[d1], &mem1);
         rc = -sqlite3IntFloatCompare(pRhs->u.i, mem1.u.r);
       }else{
         i64 lhs = vdbeRecordDecodeInt(serial_type, &aKey1[d1]);
@@ -4759,14 +4788,18 @@ int sqlite3VdbeRecordCompareWithSkip(
       }else if( serial_type==0 ){
         rc = -1;
       }else{
-        sqlite3VdbeSerialGet(&aKey1[d1], serial_type, &mem1);
         if( serial_type==7 ){
-          if( mem1.u.r<pRhs->u.r ){
+          if( serialGet7(&aKey1[d1], &mem1) ){
+            rc = -1;  /* mem1 is a NaN */
+          }else if( mem1.u.r<pRhs->u.r ){
             rc = -1;
           }else if( mem1.u.r>pRhs->u.r ){
             rc = +1;
+          }else{
+            assert( rc==0 );
           }
         }else{
+          sqlite3VdbeSerialGet(&aKey1[d1], serial_type, &mem1);
           rc = sqlite3IntFloatCompare(mem1.u.i, pRhs->u.r);
         }
       }
@@ -4836,7 +4869,14 @@ int sqlite3VdbeRecordCompareWithSkip(
     /* RHS is null */
     else{
       serial_type = aKey1[idx1];
-      rc = (serial_type!=0 && serial_type!=10);
+      if( serial_type==0
+       || serial_type==10
+       || (serial_type==7 && serialGet7(&aKey1[d1], &mem1)!=0)
+      ){
+        assert( rc==0 );
+      }else{
+        rc = 1;
+      }
     }
 
     if( rc!=0 ){
@@ -5296,7 +5336,8 @@ sqlite3_value *sqlite3VdbeGetBoundValue(Vdbe *v, int iVar, u8 aff){
   assert( iVar>0 );
   if( v ){
     Mem *pMem = &v->aVar[iVar-1];
-    assert( (v->db->flags & SQLITE_EnableQPSG)==0 );
+    assert( (v->db->flags & SQLITE_EnableQPSG)==0 
+         || (v->db->mDbFlags & DBFLAG_InternalFunc)!=0 );
     if( 0==(pMem->flags & MEM_Null) ){
       sqlite3_value *pRet = sqlite3ValueNew(v->db);
       if( pRet ){
@@ -5316,7 +5357,8 @@ sqlite3_value *sqlite3VdbeGetBoundValue(Vdbe *v, int iVar, u8 aff){
 */
 void sqlite3VdbeSetVarmask(Vdbe *v, int iVar){
   assert( iVar>0 );
-  assert( (v->db->flags & SQLITE_EnableQPSG)==0 );
+  assert( (v->db->flags & SQLITE_EnableQPSG)==0 
+       || (v->db->mDbFlags & DBFLAG_InternalFunc)!=0 );
   if( iVar>=32 ){
     v->expmask |= 0x80000000;
   }else{
