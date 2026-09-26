@@ -26,7 +26,7 @@ MACOSX_VERSION_MIN="$(sw_vers -productVersion | cut -d '.' -f 1,2)"
 SDKROOT="$(xcrun --sdk $SDK_PLATFORM_NAME --show-sdk-path)"
 CC="$(xcrun --sdk $SDK_PLATFORM_NAME -f clang)"
 CXX="$(xcrun --sdk $SDK_PLATFORM_NAME -f clang++)"
-CFLAGS="-arch x86_64 -isysroot $SDKROOT -mmacosx-version-min=$MACOSX_VERSION_MIN $OTHER_CFLAGS"
+CFLAGS="-arch $(uname -m) -isysroot $SDKROOT -mmacosx-version-min=$MACOSX_VERSION_MIN $OTHER_CFLAGS"
 CXXFLAGS=$CFLAGS
 export CC CXX CFLAGS CXXFLAGS
 
