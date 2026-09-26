@@ -7,11 +7,11 @@ CUSTOM_SQLLIBRARY_CFLAGS = // do not modify - use "SQLiteLib-USER.xcconfig"
 
 #include "SQLiteLib-USER.xcconfig"
 
-// SQLiteLib targets OS X 10.9
-MACOSX_DEPLOYMENT_TARGET = 10.9
+// SQLiteLib target
+MACOSX_DEPLOYMENT_TARGET = 12.0
 
-// SQLiteLib targets iOS 8.0
-IPHONEOS_DEPLOYMENT_TARGET = 8.0
+// SQLiteLib target
+IPHONEOS_DEPLOYMENT_TARGET = 15.0
 
 // Supported platforms
 SUPPORTED_PLATFORMS = iphonesimulator macosx iphoneos appletvsimulator appletvos watchsimulator watchos
