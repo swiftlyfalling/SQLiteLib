@@ -1,5 +1,7 @@
 The MIT License (MIT)
-
+cp SQLiteLib-USER.xcconfig.example SQLiteLib-USER.xcconfig
+xcodebuild -project SQLiteLib.xcodeproj -target sqlitecustom -sdk macosx
+make test
 Copyright (c) 2016 swiftlyfalling (https://github.com/swiftlyfalling)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
